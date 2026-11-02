@@ -74,8 +74,33 @@
     return p.length ? { p } : null;
   }
 
-  function variantsFor(hand, ch, fb) {
-    const drawn = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length);
+  // This person's usual size: median of (reference height / drawn height) over their consonants.
+  function personScale(hand, fb) {
+    const ks = [];
+    if (hand && hand.g && fb) for (const ch of GROUPS[0][1]) for (const v of hand.g[ch] || []) {
+      const r = v && v.s && v.s.length && fb(ch); if (!r) continue;
+      const u = bbox(v), f = bbox(r); ks.push((f.y1 - f.y0) / Math.max(u.y1 - u.y0, 0.02));
+    }
+    ks.sort((a, b) => a - b); return ks.length ? ks[ks.length >> 1] : 0;
+  }
+  // Drawn letters float and vary in size: move each onto the line where the reference font puts
+  // that letter, at the reference height (kept within ±25% of this person's usual size).
+  const NORM = new WeakMap();
+  function normalize(v, ch, fb, S) {
+    const ref = fb && fb(ch); if (!ref) return v;
+    const c = NORM.get(v); if (c && c.S === S) return c.v;
+    const u = bbox(v), f = bbox(ref);
+    let k = (f.y1 - f.y0) / Math.max(u.y1 - u.y0, 0.02);
+    const mark = needsGhost(ch), plain = !mark && f.y0 >= XH - 0.15 && f.y1 <= BASE + 0.15; // no tail: exact same height
+    if (S && !plain) k = Math.min(Math.max(k, 0.75 * S), 1.25 * S);
+    const topAlign = LOWER.has(ch) || (!mark && f.y1 > BASE + 0.15); // hang below-line letters from the top
+    const ty = topAlign ? f.y0 - u.y0 * k : f.y1 - u.y1 * k, tx = mark ? f.x1 - u.x1 * k : GX - u.x0 * k;
+    const out = { s: v.s.map(a => a.map((q, i) => +(i % 2 ? q * k + ty : q * k + tx).toFixed(4))) };
+    NORM.set(v, { S, v: out }); return out;
+  }
+
+  function variantsFor(hand, ch, fb, S) {
+    const drawn = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length).map(v => normalize(v, ch, fb, S));
     if (drawn.length) return drawn;
     const f = synth(ch) || (fb && fb(ch)); return f ? [f] : [];
   }
@@ -127,9 +152,9 @@
 
   // o: {x, y, width, u (page units per box unit), gap (line height in box units), seed, fb, thick}
   function layout(text, hand, o) {
-    const R = rng(o.seed || 1), last = {}, cache = {};
+    const R = rng(o.seed || 1), last = {}, cache = {}, S = personScale(hand, o.fb);
     const pick = ch => {
-      const vs = cache[ch] || (cache[ch] = variantsFor(hand, ch, o.fb)); if (!vs.length) return null;
+      const vs = cache[ch] || (cache[ch] = variantsFor(hand, ch, o.fb, S)); if (!vs.length) return null;
       let i = (R() * vs.length) | 0;
       if (vs.length > 1 && i === last[ch]) i = (i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length;
       last[ch] = i; return vs[i];
@@ -209,6 +234,12 @@
     const a3 = JSON.stringify(layout('กกกก', null, { x: 0, y: 0, width: 999, u: 10, seed: 6, fb }).fills);
     t('same seed = same ink, new seed = new ink', a1 === a2 && a1 !== a3);
     const sy = layout('(?!) 5% a/b', null, { x: 0, y: 0, width: 999, u: 10, seed: 2, fb });
+    // a small ก floating high and a ่ drawn too low get put back on their lines
+    const fake = { g: { 'ก': [{ s: [[0.5, 0.6, 0.9, 0.5, 1.0, 1.0]] }], '่': [{ s: [[1.0, 1.3, 1.0, 1.6]] }] } };
+    const nk = bbox(variantsFor(fake, 'ก', fb, 0)[0]), fk = bbox(fb('ก'));
+    t('floating letter lands on the line, normal size', Math.abs(nk.y1 - fk.y1) < 0.01 && Math.abs((nk.y1 - nk.y0) - (fk.y1 - fk.y0)) < 0.01, nk.y0.toFixed(2) + '..' + nk.y1.toFixed(2));
+    const nt = bbox(variantsFor(fake, '่', fb, personScale(fake, fb))[0]);
+    t('low tone mark moves up above the letter', nt.y1 <= XH, nt.y1.toFixed(2) + ' <= 1');
     t('symbols are auto-made pen strokes', sy.strokes.length === 10, sy.strokes.length + ' strokes');
     return r;
   }

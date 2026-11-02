@@ -148,7 +148,15 @@ function renderTeach() {
   document.querySelectorAll('#verRow button').forEach(b => b.classList.toggle('on', +b.dataset.v === ver));
   LS.set('page', page); cells.forEach((_, i) => drawBox(i)); progress();
 }
+function renderPreview() { // this page's letters as they will appear in worksheets (straightened)
+  const el = $('#preview'), w = el.clientWidth || 800;
+  const text = CHARS.slice(page * PER, page * PER + PER).filter(c => count(c.ch)).map(c => (H.needsGhost(c.ch) ? 'ก' : '') + c.ch).join(' ');
+  el.hidden = !text; if (!text) return;
+  const r = H.layout(text, hand, { x: 4, y: 0, width: w - 8, u: 16, gap: 2.4, seed: 1, fb });
+  el.innerHTML = `<div class="hint">Preview — how your letters will look on worksheets:</div><svg viewBox="0 0 ${w} ${r.height}" width="100%" height="${r.height}"><path d="${pathD(r.strokes)}" fill="none" stroke="#1a1a1a" stroke-width="${r.lw}" stroke-linecap="round" stroke-linejoin="round"/><path d="${pathD(r.fills, true)}" fill="#1a1a1a"/></svg>`;
+}
 function progress() {
+  renderPreview();
   const done = taught();
   $('#progFill').style.width = (100 * done / REQ.length) + '%';
   $('#progText').textContent = `${done}/${REQ.length} letters taught` + (done === REQ.length ? ' ✓ Done! Extra pages and versions are optional.' : '');
