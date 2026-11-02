@@ -11,14 +11,31 @@
   const isMark = c => UPPER.has(c) || TOP.has(c) || LOWER.has(c);
   const needsGhost = c => isMark(c) || c === AM;
   const GROUPS = [
-    ['พยัญชนะ Consonants', 'กขฃคฅฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ'],
-    ['สระ Vowels', 'ะาำิีึืุูเแโใไั็ๅฤฦ'],
-    ['วรรณยุกต์ Tone marks', '่้๊๋์ํๆฯ'],
-    ['ตัวเลข Numbers', '๐๑๒๓๔๕๖๗๘๙0123456789'],
-    ['เครื่องหมาย Symbols', '.,?!()-:/"\'+=%'],
-    ['English (optional)', 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'],
+    ['พยัญชนะ Consonants', 'กขคฆงจฉชซฌญฎฏฐฑฒณดตถทธนบปผฝพฟภมยรลวศษสหฬอฮ'],
+    ['สระ Vowels', 'ะาำิีึืุูเแโใไั็ฤ'],
+    ['วรรณยุกต์ Tone marks', '่้๊๋์ๆฯ'],
+    ['ตัวเลข Numbers', '0123456789'],
+    ['Optional: เลขไทย', '๐๑๒๓๔๕๖๗๘๙'],
+    ['Optional: symbols (auto-made if skipped)', '.,?!()-:/"\'+=%'],
+    ['Optional: rare letters', 'ฃฅฦๅํ'],
+    ['Optional: English', 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'],
   ];
-  const REQUIRED_GROUPS = 5;
+  const REQUIRED_GROUPS = 4;
+
+  // Simple symbols made from pen lines, so nobody has to draw them (box units).
+  const arc = (cx, cy, rx, ry, a0, a1, n = 10) => { const o = []; for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; o.push(+(cx + rx * Math.cos(a)).toFixed(3), +(cy + ry * Math.sin(a)).toFixed(3)); } return o; };
+  const DOT = y => [0.38, y, 0.4, y + 0.02], PI = Math.PI;
+  const SYNTH = {
+    '.': [DOT(1.93)], ',': [[0.4, 1.9, 0.41, 2.0, 0.35, 2.12]], '-': [[0.25, 1.5, 0.78, 1.48]],
+    ':': [DOT(1.35), DOT(1.93)], '/': [[0.75, 0.8, 0.25, 2.1]], "'": [[0.35, 0.75, 0.33, 1.05]],
+    '"': [[0.32, 0.75, 0.3, 1.05], [0.5, 0.75, 0.48, 1.05]], '+': [[0.25, 1.5, 0.78, 1.5], [0.51, 1.22, 0.51, 1.78]],
+    '=': [[0.25, 1.38, 0.78, 1.38], [0.25, 1.62, 0.78, 1.62]], '!': [[0.4, 0.8, 0.38, 1.65], DOT(1.93)],
+    '(': [arc(0.75, 1.5, 0.4, 0.78, -2.2, -4.08)], ')': [arc(0.25, 1.5, 0.4, 0.78, -0.94, 0.94)],
+    '?': [arc(0.5, 1.05, 0.25, 0.25, PI, 2.5 * PI).concat([0.5, 1.55, 0.5, 1.68]), [0.5, 1.93, 0.52, 1.95]],
+    '%': [[0.78, 0.9, 0.25, 2.05], arc(0.33, 1.15, 0.1, 0.12, 0, 2 * PI), arc(0.7, 1.85, 0.1, 0.12, 0, 2 * PI)],
+  };
+  const SYNTH_V = {};
+  const synth = ch => SYNTH[ch] ? (SYNTH_V[ch] || (SYNTH_V[ch] = { s: SYNTH[ch] })) : null;
 
   function rng(seed) {
     let a = seed >>> 0;
@@ -60,7 +77,7 @@
   function variantsFor(hand, ch, fb) {
     const drawn = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length);
     if (drawn.length) return drawn;
-    const f = fb && fb(ch); return f ? [f] : [];
+    const f = synth(ch) || (fb && fb(ch)); return f ? [f] : [];
   }
 
   // Text -> clusters {base, marks[], am} | {sp}. ำ joins the cluster before it.
@@ -129,11 +146,16 @@
       it.parts.forEach((p, k) => {
         const w = it.warps[k], list = p.v.s ? strokes : fills;
         for (const a of (p.v.s || p.v.p)) {
-          const sx = p.v.s ? J(0.012) : 0, sy = p.v.s ? J(0.012) : 0, out = new Array(a.length);
+          const pen = !!p.v.s, out = new Array(a.length);
+          const sx = pen ? J(0.012) : 0, sy = pen ? J(0.012) : 0; // pen lands a bit elsewhere each time
+          const wa = pen ? J(0.016) : 0, wb = pen ? J(0.016) : 0, wl = 0.35 + R() * 0.4, wp = R() * 6.3, wq = R() * 6.3; // wobble along the stroke
+          let arcLen = 0;
           for (let i = 0; i < a.length; i += 2) {
             const gx = a[i], gy = a[i + 1];
-            const lx = gx + w.ax * Math.sin(w.fy * gy + w.px) + p.dx + sx - it.x0;
-            const ly = gy + w.ay * Math.sin(w.fx * gx + w.py) + p.dy + sy - BASE;
+            if (i) arcLen += Math.hypot(gx - a[i - 2], gy - a[i - 1]);
+            const t = arcLen / wl * 6.283;
+            const ly = gy + w.ay * Math.sin(w.fx * gx + w.py) + wb * Math.sin(t + wq) + p.dy + sy - BASE;
+            const lx = (gx + w.ax * Math.sin(w.fy * gy + w.px) + wa * Math.sin(t + wp) + p.dx + sx - it.x0) * it.sw - ly * it.sh;
             out[i] = o.x + U * (cx + it.sc * (lx * c - ly * s));
             out[i + 1] = o.y + U * (by + it.sc * (lx * s + ly * c));
           }
@@ -143,11 +165,12 @@
     };
     for (const seg of words(text)) {
       if (seg === '\n') { newline(false); continue; }
+      const sh = J(0.06); // each word leans its own way a little
       const items = parse(seg).map(cl => {
         if (cl.sp) return { sp: true, w: 0.45 + J(0.06) };
-        const b = buildCluster(cl, pick), sc = 1 + J(0.04);
-        const w = b.parts.length ? sc * (b.x1 - b.x0) : 0.5;
-        return { ...b, sc, w, gap: 0.13 + J(0.03), th: J(0.035), jy: J(0.02), warps: b.parts.map(warp) };
+        const b = buildCluster(cl, pick), sc = 1 + J(0.04), sw = 1 + J(0.05);
+        const w = b.parts.length ? sc * sw * (b.x1 - b.x0) : 0.5;
+        return { ...b, sc, sw, sh, w, gap: 0.13 + J(0.03), th: J(0.035), jy: J(0.02), warps: b.parts.map(warp) };
       });
       const ww = items.reduce((t, it) => t + it.w + (it.gap || 0), 0);
       if (cx > 0 && cx + ww > maxW && !items[0].sp) newline(true);
@@ -185,6 +208,8 @@
     const a2 = JSON.stringify(layout('กกกก', null, { x: 0, y: 0, width: 999, u: 10, seed: 5, fb }).fills);
     const a3 = JSON.stringify(layout('กกกก', null, { x: 0, y: 0, width: 999, u: 10, seed: 6, fb }).fills);
     t('same seed = same ink, new seed = new ink', a1 === a2 && a1 !== a3);
+    const sy = layout('(?!) 5% a/b', null, { x: 0, y: 0, width: 999, u: 10, seed: 2, fb });
+    t('symbols are auto-made pen strokes', sy.strokes.length === 10, sy.strokes.length + ' strokes');
     return r;
   }
 

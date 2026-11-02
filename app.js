@@ -66,45 +66,53 @@ async function loadHandFile(file) {
   hand = h; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('Handwriting loaded ✓');
 }
 
-// ---------- Teach screen
+// ---------- Teach screen: pages of 12 letters, one box each, for the chosen version (1-5)
+const PER = 12;
 const CHARS = H.GROUPS.flatMap(([group, s], gi) => [...s].map(ch => ({ ch, group, gi })));
 const REQ = CHARS.filter(c => c.gi < H.REQUIRED_GROUPS);
-let ci = Math.max(0, Math.min(LS.get('ci', 0) | 0, CHARS.length - 1)), penSeen = LS.get('pen', false), drawing = null;
-const boxes = [];
+const PAGES = Math.ceil(CHARS.length / PER);
+let page = Math.max(0, Math.min(LS.get('page', 0) | 0, PAGES - 1)), ver = Math.max(0, Math.min(LS.get('ver', 0) | 0, 4));
+let penSeen = LS.get('pen', false), drawing = null;
+const cells = [];
 const count = ch => (hand.g[ch] || []).filter(v => v && v.s.length).length;
 const taught = () => REQ.filter(c => count(c.ch)).length;
 const label = ch => (H.needsGhost(ch) ? '◌' : '') + ch;
-const list = () => hand.g[CHARS[ci].ch] || (hand.g[CHARS[ci].ch] = [null, null, null, null, null]);
+const cellChar = i => CHARS[page * PER + i];
+const slots = ch => hand.g[ch] || (hand.g[ch] = [null, null, null, null, null]);
 
 function buildBoxes() {
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < PER; i++) {
     const wrap = document.createElement('div'); wrap.className = 'box';
-    wrap.innerHTML = '<canvas></canvas><div class="row"><button data-a="undo" aria-label="Undo">↶</button><button data-a="clear" aria-label="Clear">✕</button></div>';
-    const cv = wrap.querySelector('canvas'); boxes.push(cv); $('#boxes').append(wrap);
+    wrap.innerHTML = '<canvas></canvas><span class="lbl"></span><span class="act"><button data-a="undo" aria-label="Undo">↶</button><button data-a="clear" aria-label="Clear">✕</button></span>';
+    const cv = wrap.querySelector('canvas'); cells.push({ wrap, cv, lbl: wrap.querySelector('.lbl') }); $('#boxes').append(wrap);
     wrap.querySelector('[data-a=undo]').onclick = () => edit(i, s => (s.pop(), s));
     wrap.querySelector('[data-a=clear]').onclick = () => edit(i, () => []);
     attachPen(cv, i);
   }
+  const vr = $('#verRow'); vr.append('Version ');
+  for (let v = 0; v < 5; v++) {
+    const b = document.createElement('button'); b.textContent = v + 1; b.dataset.v = v;
+    b.onclick = () => { ver = v; LS.set('ver', v); renderTeach(); }; vr.append(b);
+  }
 }
 function edit(i, fn) { // variants are replaced, never mutated (the engine caches their sizes)
-  const l = list(); if (!l[i]) return;
-  const s = fn(l[i].s.slice()); l[i] = s.length ? { s } : null;
+  const c = cellChar(i); if (!c) return; const l = slots(c.ch); if (!l[ver]) return;
+  const s = fn(l[ver].s.slice()); l[ver] = s.length ? { s } : null;
   saveHand(); drawBox(i); progress();
 }
 function strokeLine(x, a) { x.beginPath(); x.moveTo(a[0], a[1]); if (a.length === 2) x.lineTo(a[0] + 0.001, a[1]); for (let j = 2; j < a.length; j += 2) x.lineTo(a[j], a[j + 1]); x.stroke(); }
 function fillPolys(x, polys) { x.beginPath(); for (const a of polys) { x.moveTo(a[0], a[1]); for (let j = 2; j < a.length; j += 2) x.lineTo(a[j], a[j + 1]); x.closePath(); } x.fill(); }
 function drawBox(i) {
-  const cv = boxes[i], w = cv.clientWidth; if (!w) return;
+  const c = cellChar(i), cv = cells[i].cv, w = cv.clientWidth; if (!c || !w) return;
   const dpr = devicePixelRatio || 1, k = w / H.BOX_W, W = Math.round(w * dpr), Ht = Math.round(w * H.BOX_H / H.BOX_W * dpr);
   if (cv.width !== W || cv.height !== Ht) { cv.width = W; cv.height = Ht; }
   const x = cv.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, W, Ht); x.setTransform(dpr * k, 0, 0, dpr * k, 0, 0);
   x.lineWidth = 1 / k;
-  const hl = (y, c, dash) => { x.strokeStyle = c; x.setLineDash(dash ? [4 / k, 4 / k] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(H.BOX_W, y); x.stroke(); };
+  const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / k, 4 / k] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(H.BOX_W, y); x.stroke(); };
   hl(0.3, '#e5e7eb', 1); hl(H.XH, '#cbd5e1'); hl(H.BASE, '#94a3b8'); hl(2.5, '#e5e7eb', 1); x.setLineDash([]);
-  const ch = CHARS[ci].ch;
-  if (H.needsGhost(ch)) { const g = fb('ก'); if (g) { x.fillStyle = '#d4d4d8'; fillPolys(x, g.p); } }
+  if (H.needsGhost(c.ch)) { const g = fb('ก'); if (g) { x.fillStyle = '#d4d4d8'; fillPolys(x, g.p); } }
   x.strokeStyle = '#1a1a1a'; x.lineWidth = 0.075; x.lineCap = x.lineJoin = 'round';
-  const v = (hand.g[ch] || [])[i];
+  const v = (hand.g[c.ch] || [])[ver];
   for (const a of v ? v.s : []) strokeLine(x, a);
   if (drawing && drawing.i === i) strokeLine(x, drawing.pts);
 }
@@ -112,7 +120,7 @@ function attachPen(cv, i) {
   const pt = e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * H.BOX_W).toFixed(3), +((e.clientY - r.top) / r.height * H.BOX_H).toFixed(3)]; };
   cv.addEventListener('pointerdown', e => {
     if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); }
-    if ((e.pointerType === 'touch' && penSeen) || drawing) return; // palm rejection once a Pencil was used
+    if ((e.pointerType === 'touch' && penSeen) || drawing || !cellChar(i)) return; // palm rejection once a Pencil was used
     e.preventDefault(); cv.setPointerCapture(e.pointerId);
     drawing = { i, id: e.pointerId, pts: pt(e) }; drawBox(i);
   });
@@ -127,38 +135,29 @@ function attachPen(cv, i) {
   });
   const end = e => {
     if (!drawing || drawing.id !== e.pointerId) return;
-    const d = drawing, l = list(); drawing = null;
-    l[i] = { s: [...(l[i] ? l[i].s : []), d.pts] };
+    const d = drawing, l = slots(cellChar(i).ch); drawing = null;
+    l[ver] = { s: [...(l[ver] ? l[ver].s : []), d.pts] };
     saveHand(); drawBox(i); progress();
   };
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
 }
 function renderTeach() {
-  const c = CHARS[ci];
-  $('#ch').textContent = label(c.ch); $('#chInfo').textContent = `${c.group} · ${ci + 1}/${CHARS.length}`;
-  LS.set('ci', ci); boxes.forEach((_, i) => drawBox(i)); progress();
-  if (!$('#grid').hidden) buildGrid();
+  cells.forEach((c, i) => { const ch = cellChar(i); c.wrap.hidden = !ch; if (ch) c.lbl.textContent = label(ch.ch); });
+  const groups = [...new Set(CHARS.slice(page * PER, page * PER + PER).map(c => c.group))].join(' · ');
+  $('#pageInfo').textContent = `Page ${page + 1}/${PAGES} · ${groups}`;
+  document.querySelectorAll('#verRow button').forEach(b => b.classList.toggle('on', +b.dataset.v === ver));
+  LS.set('page', page); cells.forEach((_, i) => drawBox(i)); progress();
 }
 function progress() {
   const done = taught();
   $('#progFill').style.width = (100 * done / REQ.length) + '%';
-  $('#progText').textContent = `${done}/${REQ.length} letters taught`;
+  $('#progText').textContent = `${done}/${REQ.length} letters taught` + (done === REQ.length ? ' ✓ Done! Extra pages and versions are optional.' : '');
   if (done === REQ.length && !LS.get('doneNag', false)) {
     LS.set('doneNag', true);
     setTimeout(() => { if (confirm('All letters taught! 🎉 Save your handwriting file now as a backup?')) saveHandFile(); }, 300);
   }
 }
-function buildGrid() {
-  const g = $('#grid'); g.innerHTML = ''; let gi = -1;
-  CHARS.forEach((c, idx) => {
-    if (c.gi !== gi) { gi = c.gi; const h = document.createElement('h4'); h.textContent = c.group; g.append(h); }
-    const b = document.createElement('button'), n = count(c.ch);
-    b.className = n >= 5 ? 'c5' : n ? 'c1' : 'c0'; b.textContent = label(c.ch); b.title = n + '/5';
-    b.onclick = () => { ci = idx; g.hidden = true; renderTeach(); scrollTo(0, 0); };
-    g.append(b);
-  });
-}
-const step = d => { ci = (ci + d + CHARS.length) % CHARS.length; renderTeach(); };
+const step = d => { page = (page + d + PAGES) % PAGES; renderTeach(); scrollTo(0, 0); };
 
 // ---------- Worksheet screen
 let sheet = null, sel = null, down = null;
@@ -319,12 +318,11 @@ function wire() {
   $('#loadHand').onclick = () => $('#loadHandFile').click();
   $('#loadHandFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadHandFile(f); };
   $('#prev').onclick = () => step(-1); $('#next').onclick = () => step(1);
-  $('#allBtn').onclick = () => { const g = $('#grid'); g.hidden = !g.hidden; if (!g.hidden) buildGrid(); };
   document.addEventListener('keydown', e => {
     if ($('#teach').hidden || e.target.matches('textarea, input')) return;
     if (e.key === 'ArrowRight') step(1); else if (e.key === 'ArrowLeft') step(-1);
   });
-  addEventListener('resize', () => { if (!$('#teach').hidden) boxes.forEach((_, i) => drawBox(i)); });
+  addEventListener('resize', () => { if (!$('#teach').hidden) cells.forEach((_, i) => drawBox(i)); });
   $('#openBtn').onclick = () => $('#openFile').click();
   $('#openFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openFile(f); };
   $('#exportBtn').onclick = exportPdf;
