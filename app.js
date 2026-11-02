@@ -159,7 +159,7 @@ function renderPreview() { // this page's letters as they will appear in workshe
   const text = CHARS.slice(page * PER, page * PER + PER).filter(c => count(c.ch)).map(c => (H.needsGhost(c.ch) ? 'ก' : '') + c.ch).join(' ');
   el.hidden = !text; if (!text) return;
   const r = H.layout(text, hand, { x: 4, y: 0, width: w - 8, u: 16, gap: 2.4, seed: 1, fb });
-  el.innerHTML = `<div class="hint">Preview — how your letters will look on worksheets:</div><svg viewBox="0 0 ${w} ${r.height}" width="100%" height="${r.height}"><path d="${pathD(r.strokes)}" fill="none" stroke="#1a1a1a" stroke-width="${r.lw}" stroke-linecap="round" stroke-linejoin="round"/><path d="${pathD(r.fills, true)}" fill="#1a1a1a"/></svg>`;
+  el.innerHTML = `<div class="hint">Preview — how your letters will look on worksheets:</div><svg viewBox="0 0 ${w} ${r.height}" width="100%" height="${r.height}">${penPaths(r, '#1a1a1a')}<path d="${pathD(r.fills, true)}" fill="#1a1a1a"/></svg>`;
 }
 function progress() {
   renderPreview();
@@ -182,6 +182,8 @@ const pathD = (arrs, close) => arrs.map(a => {
   for (let i = 2; i < a.length; i += 2) s += 'L' + a[i].toFixed(2) + ' ' + a[i + 1].toFixed(2);
   return close ? s + 'Z' : s;
 }).join('');
+// pen strokes, one path per pen pressure (line width)
+const penPaths = (r, color) => r.pens.map(([w, s]) => `<path d="${pathD(s)}" fill="none" stroke="${color}" stroke-width="${w.toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join('');
 const toPage = (pg, e) => { const r = pg.el.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * pg.w, (e.clientY - r.top) / r.height * pg.h]; };
 
 async function openFile(file) {
@@ -266,7 +268,7 @@ function renderInk(pg) {
   let html = '';
   for (const b of pg.boxes) {
     const r = lay(b); b.h = Math.max(r.height, b.u * 2.6);
-    if (r.strokes.length) html += `<path d="${pathD(r.strokes)}" fill="none" stroke="${ink.color}" stroke-width="${r.lw.toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    html += penPaths(r, ink.color);
     if (r.fills.length) html += `<path d="${pathD(r.fills, true)}" fill="${ink.color}"/>`;
     const s = b.el.style; s.left = 100 * b.x / pg.w + '%'; s.top = 100 * b.y / pg.h + '%'; s.width = 100 * b.w / pg.w + '%'; s.height = 100 * b.h / pg.h + '%';
   }
@@ -299,8 +301,8 @@ async function buildPdf() {
       if (close) ops.push(P.closePath());
     };
     for (const bx of pg.boxes) {
-      const res = lay(bx); ops.push(P.setLineWidth(res.lw));
-      if (res.strokes.length) { res.strokes.forEach(a => path(a)); ops.push(P.stroke()); }
+      const res = lay(bx);
+      for (const [w, s] of res.pens) { ops.push(P.setLineWidth(w)); s.forEach(a => path(a)); ops.push(P.stroke()); }
       if (res.fills.length) { res.fills.forEach(a => path(a, true)); ops.push(P.fill()); }
     }
     ops.push(P.popGraphicsState());
