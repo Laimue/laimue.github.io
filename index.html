@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>LaiMue ลายมือ</title>
-<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f7f6f3" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0a0a" media="(prefers-color-scheme: dark)">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -14,6 +14,8 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <link rel="icon" href="icons/icon-192.png">
+<link rel="preload" href="lib/fonts/kanit-800-thai.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="lib/fonts/kanit-800-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -34,12 +36,13 @@
     <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 7V4h4v3M6 7l1 13h10l1-13"/></symbol>
     <symbol id="i-reset" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7L4 8.6"/><path d="M4 4v4.6h4.6"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></symbol>
     <symbol id="i-save" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></symbol>
   </defs>
 </svg>
 
 <header class="bar-top">
-  <b class="mark">ลายมือ</b>
+  <b class="mark">ลายมือ<i></i></b>
   <nav class="tabs" role="tablist">
     <button data-tab="teach" class="tab" role="tab"><svg class="i"><use href="#i-pen"/></svg>สอนลายมือ</button>
     <button data-tab="sheet" class="tab" role="tab"><svg class="i"><use href="#i-doc"/></svg>ใบงาน</button>
@@ -50,6 +53,7 @@
       <button id="saveHand"><svg class="i"><use href="#i-save"/></svg>Save my handwriting file</button>
       <button id="loadHand"><svg class="i"><use href="#i-open"/></svg>Load handwriting file</button>
       <input id="loadHandFile" type="file" accept=".json,application/json" hidden>
+      <button id="themeBtn"><svg class="i"><use href="#i-theme"/></svg>Theme: <span id="themeName">Auto</span></button>
       <button id="playIntro"><svg class="i"><use href="#i-pen"/></svg>Play the welcome intro</button>
       <button id="clearHand" class="danger"><svg class="i"><use href="#i-trash"/></svg>Clear all my letters</button>
       <div id="ver"></div>
@@ -61,21 +65,25 @@
 <div id="installHint" hidden><span>On iPad, tap <b>Share</b> then <b>Add to Home Screen</b> so your handwriting stays saved.</span> <button id="hideHint">OK</button></div>
 
 <section id="teach" hidden>
-  <div class="title-row">
-    <h1>Teach your handwriting</h1>
-    <div class="pager">
-      <button id="prev" class="icon" aria-label="Previous page"><svg class="i"><use href="#i-left"/></svg></button>
-      <div id="pageInfo"></div>
-      <button id="next" class="icon" aria-label="Next page"><svg class="i"><use href="#i-right"/></svg></button>
-    </div>
+  <div class="t-head">
+    <h1 class="kin" id="teachTitle">Teach your <em>hand.</em></h1>
+    <div class="hud"><span id="hudPos" class="mono"></span><span id="hudGrp" class="mono"></span></div>
   </div>
-  <div class="sub-row">
+  <div class="ruler-row"><div class="ruler" aria-hidden="true"><i id="rulerHead"></i></div><span id="progText" class="mono"></span></div>
+  <div class="stage">
+    <button id="ghostPrev" class="ghost" aria-label="Previous letter"><canvas></canvas></button>
+    <div id="padWrap" class="pad frame"><canvas id="pad" aria-label="Writing pad"></canvas><span id="padLbl" class="lbl"></span></div>
+    <button id="ghostNext" class="ghost" aria-label="Next letter"><canvas></canvas></button>
+  </div>
+  <div class="ctrls">
+    <button id="prev" class="icon" aria-label="Previous letter"><svg class="i"><use href="#i-left"/></svg></button>
+    <button id="undo" class="btn"><svg class="i"><use href="#i-undo"/></svg>Undo</button>
+    <button id="clear" class="btn"><svg class="i"><use href="#i-x"/></svg>Clear</button>
     <div id="verRow" class="seg" aria-label="Version"></div>
-    <div class="prog-wrap"><div class="prog"><div id="progFill"></div></div><span id="progText"></span></div>
+    <button id="next" class="btn primary">Next<svg class="i"><use href="#i-right"/></svg></button>
   </div>
-  <p class="hint">Write each letter once in its box. One version is enough; extra versions make it more natural. The grey ก shows where vowels and tone marks go.</p>
-  <div id="boxes"></div>
-  <div id="preview" hidden></div>
+  <details id="pvWrap"><summary class="mono">Preview this group</summary><div id="preview"></div></details>
+  <div id="strip" aria-label="Letters"></div>
 </section>
 
 <section id="sheet" hidden>
@@ -108,9 +116,13 @@
   </div>
   <div class="well">
     <div id="empty">
-      <div id="emptyAnim" class="lot" aria-hidden="true"></div>
-      <p id="sheetHint">Open a PDF or a photo of your worksheet, then tap where an answer goes.</p>
-      <button id="openBtn2" class="btn primary"><svg class="i"><use href="#i-open"/></svg>Open worksheet</button>
+      <div class="floor" aria-hidden="true"></div>
+      <div class="term frame">
+        <div class="mono term-bar">laimue / ใบงาน</div>
+        <p class="term-line"><span class="pr">&gt;</span> <span id="promptTxt"></span><i class="caret"></i></p>
+        <p id="sheetHint">Open a PDF or a photo of your worksheet, then tap where an answer goes.</p>
+        <button id="openBtn2" class="btn primary"><svg class="i"><use href="#i-open"/></svg>Open worksheet</button>
+      </div>
     </div>
     <div id="pages"></div>
   </div>
@@ -124,18 +136,21 @@
 </div>
 <div id="toast" hidden></div>
 <div id="intro" hidden role="dialog" aria-modal="true" aria-label="Welcome to LaiMue">
-  <div class="in-card">
-    <button class="in-skip">Skip</button>
+  <button class="in-skip">Skip</button>
+  <div class="in-stage frame">
     <div class="in-title" aria-label="ลายมือ"></div>
-    <p class="in-tag">Your own handwriting, on any worksheet.</p>
     <ol class="in-steps">
-      <li class="in-step"><svg class="i"><use href="#i-pen"/></svg><b>Teach</b><span>Write each Thai letter once with your Pencil.</span></li>
-      <li class="in-step"><svg class="i"><use href="#i-text"/></svg><b>Type</b><span>Open a worksheet and type your answers.</span></li>
-      <li class="in-step"><svg class="i"><use href="#i-share"/></svg><b>Save</b><span>Save a PDF that looks handwritten.</span></li>
+      <li><b>Teach.</b><span>Write each Thai letter once with your Pencil.</span></li>
+      <li><b>Type.</b><span>Open a worksheet and type your answers.</span></li>
+      <li><b class="hot">Save.</b><span>Save a PDF that looks handwritten.</span></li>
     </ol>
     <button class="in-start btn primary">Start writing</button>
   </div>
 </div>
+<div class="glow" aria-hidden="true"></div>
+<canvas id="fx" aria-hidden="true"></canvas>
+<div id="scan" aria-hidden="true"></div>
+<div id="flash" hidden aria-hidden="true"><b></b></div>
 <script src="lib/opentype.min.js"></script>
 <script src="lib/pdf.min.js"></script>
 <script src="lib/pdf-lib.min.js"></script>

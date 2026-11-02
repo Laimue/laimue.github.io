@@ -72,64 +72,80 @@ function clearHand() {
   hand = { v: 1, g: {} }; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('All letters cleared. Write them again on the Teach tab.');
 }
 
-// ---------- Teach screen: pages of 12 letters, one box each, for the chosen version (1-5)
-const PER = 24;
+// ---------- Teach screen: one big pad for the current letter + a strip of every letter; the chosen version (1-5)
 const CHARS = H.GROUPS.flatMap(([group, s], gi) => [...s].map(ch => ({ ch, group, gi })));
-const REQ = CHARS.filter(c => c.gi < H.REQUIRED_GROUPS);
-const PAGES = Math.ceil(CHARS.length / PER);
-let page = Math.max(0, Math.min(LS.get('page', 0) | 0, PAGES - 1)), ver = Math.max(0, Math.min(LS.get('ver', 0) | 0, 4));
-let penSeen = LS.get('pen', false), drawing = null;
-const cells = [];
+const REQ = CHARS.filter(c => c.gi < H.REQUIRED_GROUPS), N = CHARS.length;
+const clampI = i => Math.max(0, Math.min(i | 0, N - 1));
+let cur = clampI(LS.get('cur', LS.get('page', 0) * 24)), ver = Math.max(0, Math.min(LS.get('ver', 0) | 0, 4)); // 'page' = the v15 pages of 24
+let penSeen = LS.get('pen', false), drawing = null, fresh = false, dirty = false, advT = 0, sparkStop = null, lastDone = -1;
+const chips = [];
 const count = ch => (hand.g[ch] || []).filter(v => v && v.s.length).length;
 const taught = () => REQ.filter(c => count(c.ch)).length;
 const label = ch => (H.needsGhost(ch) ? '◌' : '') + ch;
-const cellChar = i => CHARS[page * PER + i];
 const slots = ch => hand.g[ch] || (hand.g[ch] = [null, null, null, null, null]);
+const vOf = (i, v = ver) => (hand.g[CHARS[i].ch] || [])[v] || null;
+const padCv = () => $('#pad');
 
-function buildBoxes() {
-  for (let i = 0; i < PER; i++) {
-    const wrap = document.createElement('div'); wrap.className = 'box';
-    wrap.innerHTML = '<canvas></canvas><span class="lbl"></span><span class="act"><button data-a="undo" aria-label="Undo"><svg class="i"><use href="#i-undo"/></svg></button><button data-a="clear" aria-label="Clear"><svg class="i"><use href="#i-x"/></svg></button></span>';
-    const cv = wrap.querySelector('canvas'); cells.push({ wrap, cv, lbl: wrap.querySelector('.lbl') }); $('#boxes').append(wrap);
-    wrap.querySelector('[data-a=undo]').onclick = () => edit(i, s => (s.pop(), s));
-    wrap.querySelector('[data-a=clear]').onclick = () => edit(i, () => []);
-    attachPen(cv, i);
-  }
-  const vr = $('#verRow');
-  for (let v = 0; v < 5; v++) {
-    const b = document.createElement('button'); b.textContent = v + 1; b.dataset.v = v;
-    b.onclick = () => { ver = v; LS.set('ver', v); renderTeach(); }; vr.append(b);
-  }
-}
-function edit(i, fn) { // variants are replaced, never mutated (the engine caches their sizes)
-  const c = cellChar(i); if (!c) return; const l = slots(c.ch); if (!l[ver]) return;
-  const s = fn(l[ver].s.slice()); l[ver] = s.length ? { s } : null;
-  saveHand(); drawBox(i); progress();
-}
 function strokeLine(x, a) { x.beginPath(); x.moveTo(a[0], a[1]); if (a.length === 2) x.lineTo(a[0] + 0.001, a[1]); for (let j = 2; j < a.length; j += 2) x.lineTo(a[j], a[j + 1]); x.stroke(); }
 function fillPolys(x, polys) { x.beginPath(); for (const a of polys) { x.moveTo(a[0], a[1]); for (let j = 2; j < a.length; j += 2) x.lineTo(a[j], a[j + 1]); x.closePath(); } x.fill(); }
-function drawBox(i) {
-  const c = cellChar(i), cv = cells[i].cv, w = cv.clientWidth; if (!c || !w) return;
+// one letter box: guide lines, a grey ก under marks, the faint typed letter while empty, then the person's strokes
+function paint(cv, i, o = {}) {
+  const c = CHARS[i], w = cv && cv.clientWidth; if (!c || !w) return;
   const dpr = devicePixelRatio || 1, k = w / H.BOX_W, W = Math.round(w * dpr), Ht = Math.round(w * H.BOX_H / H.BOX_W * dpr);
   if (cv.width !== W || cv.height !== Ht) { cv.width = W; cv.height = Ht; }
   const x = cv.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, W, Ht); x.setTransform(dpr * k, 0, 0, dpr * k, 0, 0);
-  x.lineWidth = 1 / k;
-  const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / k, 4 / k] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(H.BOX_W, y); x.stroke(); };
-  hl(0.3, '#e5e7eb', 1); hl(H.XH, '#cbd5e1'); hl(H.BASE, '#94a3b8'); hl(2.5, '#e5e7eb', 1); x.setLineDash([]);
-  if (H.needsGhost(c.ch)) { const g = fb('ก'); if (g) { x.fillStyle = '#d4d4d8'; fillPolys(x, g.p); } }
-  const v = (hand.g[c.ch] || [])[ver], ty = !v && fb(c.ch); // empty box: faint typed letter as a "write here" guide; the app fixes the rest
-  if (ty && ty.p) { x.fillStyle = 'rgba(37,99,235,0.1)'; fillPolys(x, ty.p); }
-  x.strokeStyle = '#1a1a1a'; x.lineWidth = 0.075; x.lineCap = x.lineJoin = 'round';
+  if (o.guides) {
+    x.lineWidth = 1 / k;
+    const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / k, 4 / k] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(H.BOX_W, y); x.stroke(); };
+    hl(0.3, '#e7e5df', 1); hl(H.XH, '#d3d0c8'); hl(H.BASE, '#a29e94'); hl(2.5, '#e7e5df', 1); x.setLineDash([]);
+  }
+  if (H.needsGhost(c.ch)) { const g = fb('ก'); if (g) { x.fillStyle = '#dad8d2'; fillPolys(x, g.p); } }
+  const v = vOf(i), ty = !v && fb(c.ch); // empty box: faint typed letter as a "write here" guide; the app fixes the rest
+  if (ty && ty.p) { x.fillStyle = o.guides ? 'rgba(255,77,23,0.13)' : 'rgba(0,0,0,0.16)'; fillPolys(x, ty.p); }
+  x.strokeStyle = '#141414'; x.lineWidth = o.guides ? 0.075 : 0.11; x.lineCap = x.lineJoin = 'round';
   for (const a of v ? v.s : []) strokeLine(x, a);
-  if (drawing && drawing.i === i) strokeLine(x, drawing.pts);
+  if (o.live) strokeLine(x, o.live);
 }
-function attachPen(cv, i) {
+const drawPad = () => { paint(padCv(), cur, { guides: true, live: drawing && drawing.pts }); $('#padLbl').textContent = label(CHARS[cur].ch); };
+const ghosts = () => [$('#ghostPrev canvas'), $('#ghostNext canvas')];
+const drawGhosts = () => { paint(ghosts()[0], (cur - 1 + N) % N, { guides: true }); paint(ghosts()[1], (cur + 1) % N, { guides: true }); };
+function drawChip(i) { const c = chips[i]; if (!c) return; paint(c.cv, i); c.b.classList.toggle('ok', !!vOf(i)); c.b.classList.toggle('on', i === cur); c.b.setAttribute('aria-current', i === cur); }
+
+function buildTeach() {
+  const st = $('#strip'); let g = null;
+  CHARS.forEach((c, i) => {
+    if (c.group !== g) { g = c.group; const l = document.createElement('span'); l.className = 'gl mono'; l.textContent = g; st.append(l); }
+    const b = document.createElement('button'); b.className = 'chip'; b.setAttribute('aria-label', 'Letter ' + c.ch);
+    b.innerHTML = '<canvas></canvas>'; b.onclick = () => go(i); st.append(b); chips[i] = { b, cv: b.firstChild };
+  });
+  const vr = $('#verRow');
+  for (let v = 0; v < 5; v++) {
+    const b = document.createElement('button'); b.textContent = v + 1; b.dataset.v = v; b.setAttribute('aria-label', 'Version ' + (v + 1));
+    b.onclick = () => { if (v === ver) return; cancelAdv(); ver = v; LS.set('ver', v); renderTeach(); }; vr.append(b);
+  }
+  attachPen(padCv());
+  $('#undo').onclick = () => edit(s => (s.pop(), s));
+  $('#clear').onclick = () => edit(() => []);
+  $('#prev').onclick = $('#ghostPrev').onclick = () => go(cur - 1, -1);
+  $('#next').onclick = $('#ghostNext').onclick = () => go(cur + 1, 1);
+  $('#pvWrap').ontoggle = renderPreview;
+}
+const arrive = () => { fresh = !vOf(cur); dirty = false; }; // auto-advance only for a letter that was empty when you got to it
+function edit(fn) { // variants are replaced, never mutated (the engine caches their sizes)
+  cancelAdv();
+  const l = slots(CHARS[cur].ch); if (!l[ver]) return;
+  const s = fn(l[ver].s.slice()); l[ver] = s.length ? { s } : null;
+  saveHand(); drawPad(); drawChip(cur); progress();
+}
+function attachPen(cv) {
   const pt = e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * H.BOX_W).toFixed(3), +((e.clientY - r.top) / r.height * H.BOX_H).toFixed(3)]; };
   cv.addEventListener('pointerdown', e => {
     if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); document.body.classList.add('pen-seen'); }
-    if ((e.pointerType === 'touch' && penSeen) || drawing || !cellChar(i)) return; // palm rejection once a Pencil was used
-    e.preventDefault(); cv.setPointerCapture(e.pointerId);
-    drawing = { i, id: e.pointerId, pts: pt(e) }; drawBox(i);
+    if ((e.pointerType === 'touch' && penSeen) || drawing) return; // palm rejection once a Pencil was used
+    e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
+    cancelAdv(); if (M.settle(cv)) { M.settle(ghosts()[0]); M.settle(ghosts()[1]); drawGhosts(); } // a letter swap still running ends now, so the stroke lands on this letter
+    document.body.classList.add('inking');
+    drawing = { id: e.pointerId, pts: pt(e) }; drawPad();
   });
   cv.addEventListener('pointermove', e => {
     if (!drawing || drawing.id !== e.pointerId) return;
@@ -138,41 +154,66 @@ function attachPen(cv, i) {
       const [x, y] = pt(ev), p = drawing.pts;
       if (Math.hypot(x - p[p.length - 2], y - p[p.length - 1]) >= 0.012) p.push(x, y);
     }
-    drawBox(i);
+    drawPad();
   });
   const end = e => {
     if (!drawing || drawing.id !== e.pointerId) return;
-    const d = drawing, l = slots(cellChar(i).ch); drawing = null;
-    l[ver] = { s: [...(l[ver] ? l[ver].s : []), d.pts] };
-    saveHand(); drawBox(i); progress();
+    const d = drawing, l = slots(CHARS[cur].ch); drawing = null; document.body.classList.remove('inking');
+    l[ver] = { s: [...(l[ver] ? l[ver].s : []), d.pts] }; dirty = true;
+    saveHand(); drawPad(); drawChip(cur); progress(); queueAdv();
   };
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
 }
-function renderTeach() {
-  cells.forEach((c, i) => { const ch = cellChar(i); c.wrap.hidden = !ch; if (ch) c.lbl.textContent = label(ch.ch); });
-  const groups = [...new Set(CHARS.slice(page * PER, page * PER + PER).map(c => c.group))].join(' · ');
-  $('#pageInfo').innerHTML = `<b>Page ${page + 1} of ${PAGES}</b> · ${groups}`;
-  document.querySelectorAll('#verRow button').forEach(b => b.classList.toggle('on', +b.dataset.v === ver));
-  LS.set('page', page); cells.forEach((_, i) => drawBox(i)); progress();
+// ---------- auto-advance: 1.4 s after the last lift the spark runs once round the pad, then the next empty letter slides in
+const ADV = 1.4;
+function cancelAdv() { clearTimeout(advT); advT = 0; if (sparkStop) sparkStop(); sparkStop = null; $('#padWrap').classList.remove('counting'); }
+function queueAdv() {
+  cancelAdv(); if (!fresh || !vOf(cur)) return;
+  $('#padWrap').classList.add('counting'); sparkStop = M.spark.loop(padCv(), ADV);
+  advT = setTimeout(() => { cancelAdv(); const n = nextEmpty(); if (n >= 0) go(n, 1); }, ADV * 1000);
 }
-function renderPreview() { // this page's letters as they will appear in worksheets (straightened)
-  const el = $('#preview'), w = el.clientWidth || 800;
-  const text = CHARS.slice(page * PER, page * PER + PER).filter(c => count(c.ch)).map(c => (H.needsGhost(c.ch) ? 'ก' : '') + c.ch).join(' ');
-  el.hidden = !text; if (!text) return;
+function nextEmpty() { for (let d = 1; d < N; d++) { const j = (cur + d) % N; if (!vOf(j)) return j; } return -1; }
+function go(n, dir) {
+  n = (n + N) % N; if (n === cur) return;
+  cancelAdv(); dir = dir || (n > cur ? 1 : -1);
+  if (dirty) M.spark.fly(padCv(), chips[cur].b); // the letter just written flies into its slot
+  const was = cur; cur = n; LS.set('cur', cur); arrive();
+  drawChip(was); drawChip(cur); meta(); centreStrip();
+  M.swap([padCv(), ...ghosts()], dir, () => { drawPad(); drawGhosts(); });
+}
+function centreStrip(smooth = true) {
+  const st = $('#strip'), b = chips[cur].b;
+  st.scrollTo({ left: b.offsetLeft - st.clientWidth / 2 + b.offsetWidth / 2, behavior: smooth && M.can() ? 'smooth' : 'auto' });
+}
+function meta() {
+  const c = CHARS[cur], n = String(cur + 1).padStart(2, '0');
+  $('#hudPos').textContent = `Letter ${n} / ${N}`; $('#hudGrp').textContent = c.group;
+  document.querySelectorAll('#verRow button').forEach(b => b.classList.toggle('on', +b.dataset.v === ver));
+  if ($('#pvWrap').open) renderPreview();
+}
+function renderTeach() {
+  arrive(); meta(); drawPad(); drawGhosts(); chips.forEach((_, i) => drawChip(i)); progress(); centreStrip(false);
+}
+function renderPreview() { // this group's letters as they will appear in worksheets (straightened)
+  const el = $('#preview'); if (!$('#pvWrap').open) return;
+  const g = CHARS[cur].group, w = (el.clientWidth || 824) - 24;
+  const text = CHARS.filter(c => c.group === g && count(c.ch)).map(c => (H.needsGhost(c.ch) ? 'ก' : '') + c.ch).join(' ');
+  if (!text) { el.textContent = 'Nothing written in this group yet.'; return; }
   const r = H.layout(text, hand, { x: 4, y: 0, width: w - 8, u: 16, gap: 2.4, seed: 1, fb });
-  el.innerHTML = `<div class="hint">Preview — how your letters will look on worksheets:</div><svg viewBox="0 0 ${w} ${r.height}" width="100%" height="${r.height}">${penPaths(r, '#1a1a1a')}<path d="${pathD(r.fills, true)}" fill="#1a1a1a"/></svg>`;
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${r.height}" width="100%" height="${r.height}">${penPaths(r, '#141414')}<path d="${pathD(r.fills, true)}" fill="#141414"/></svg>`;
 }
 function progress() {
-  renderPreview();
+  if ($('#pvWrap').open) renderPreview();
   const done = taught();
-  $('#progFill').style.width = (100 * done / REQ.length) + '%';
-  $('#progText').textContent = `${done}/${REQ.length} letters taught` + (done === REQ.length ? '. All done; extra pages and versions are optional.' : '');
+  $('#rulerHead').style.left = (100 * done / REQ.length) + '%';
+  $('#progText').textContent = `${done}/${REQ.length} taught`;
+  const first = lastDone >= 0 && lastDone < REQ.length && done === REQ.length; lastDone = done;
+  if (first && !M.flash('ครบแล้ว.')) doneToast('All letters taught');
   if (done === REQ.length && !LS.get('doneNag', false)) {
     LS.set('doneNag', true);
-    setTimeout(() => { if (confirm('All letters taught. Save your handwriting file now as a backup?')) saveHandFile(); }, 300);
+    setTimeout(() => { if (confirm('All letters taught. Save your handwriting file now as a backup?')) saveHandFile(); }, 1600);
   }
 }
-const step = d => { page = (page + d + PAGES) % PAGES; renderTeach(); scrollTo(0, 0); };
 
 // ---------- Worksheet screen
 let sheet = null, sel = null, down = null;
@@ -408,7 +449,7 @@ async function buildPdf() {
 async function exportPdf() {
   if (!sheet) return; select(null);
   const btn = $('#exportBtn'); btn.disabled = true;
-  try { await saveFile(new Blob([await buildPdf()], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf'); doneToast('PDF saved'); }
+  try { await saveFile(new Blob([await buildPdf()], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf'); if (!M.flash('SAVED.')) doneToast('PDF saved'); }
   catch (e) { console.error(e); toast('Could not make the PDF: ' + e.message, 6000); }
   btn.disabled = false;
 }
@@ -418,7 +459,11 @@ function showTab(t) {
   LS.set('tab', t);
   for (const s of ['teach', 'sheet']) $('#' + s).hidden = s !== t;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
-  if (t === 'teach') requestAnimationFrame(renderTeach); else if (sheet) sheet.pages.forEach(pg => { renderInk(pg); M.writeOn(pg.svg); });
+  if (t !== 'teach') cancelAdv();
+  M.tab($('#' + t));
+  if (t === 'teach') requestAnimationFrame(() => { renderTeach(); M.words($('#teachTitle')); M.frame($('#padWrap')); });
+  else if (sheet) sheet.pages.forEach(pg => { renderInk(pg); M.writeOn(pg.svg); });
+  else { M.frame($('.term')); M.prompt($('#promptTxt'), 'เปิดใบงาน แล้วเขียนคำตอบ…'); }
 }
 function wire() {
   document.querySelectorAll('.tab').forEach(b => (b.onclick = () => showTab(b.dataset.tab)));
@@ -427,22 +472,23 @@ function wire() {
   $('#saveHand').onclick = saveHandFile;
   $('#clearHand').onclick = clearHand;
   $('#playIntro').onclick = showIntro;
-  M.icon($('#emptyAnim'), 'empty', true);
+  const themes = ['auto', 'light', 'dark'], setTheme = t => { if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; $('#themeName').textContent = t[0].toUpperCase() + t.slice(1); LS.set('theme', t); };
+  setTheme(themes.includes(LS.get('theme')) ? LS.get('theme') : 'auto');
+  $('#themeBtn').onclick = e => { e.stopPropagation(); setTheme(themes[(themes.indexOf(LS.get('theme', 'auto')) + 1) % 3]); };
   $('#loadHand').onclick = () => $('#loadHandFile').click();
   $('#loadHandFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadHandFile(f); };
-  $('#prev').onclick = () => step(-1); $('#next').onclick = () => step(1);
   document.addEventListener('keydown', e => {
     if ($('#teach').hidden || e.target.matches('textarea, input')) return;
-    if (e.key === 'ArrowRight') step(1); else if (e.key === 'ArrowLeft') step(-1);
+    if (e.key === 'ArrowRight') go(cur + 1, 1); else if (e.key === 'ArrowLeft') go(cur - 1, -1);
   });
-  addEventListener('resize', () => { if (!$('#teach').hidden) cells.forEach((_, i) => drawBox(i)); });
+  addEventListener('resize', () => { if (!$('#teach').hidden) { cancelAdv(); renderTeach(); } });
   $('#openBtn').onclick = $('#openBtn2').onclick = () => $('#openFile').click();
   document.querySelectorAll('[data-tool]').forEach(b => (b.onclick = () => setTool(b.dataset.tool))); setTool(tool);
   document.querySelectorAll('#lassoMenu button').forEach(b => (b.onclick = e => { e.stopPropagation(); lassoAct(b.dataset.l); }));
   if (penSeen) document.body.classList.add('pen-seen');
   // iPad: no pinch zoom of the whole app; a Pencil on a drawing surface never scrolls the page
   for (const g of ['gesturestart', 'gesturechange']) document.addEventListener(g, e => e.preventDefault(), { passive: false });
-  document.addEventListener('touchmove', e => { if ([...e.touches].some(t => t.touchType === 'stylus') && e.target.closest('.box canvas, .page.lasso')) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', e => { if ([...e.touches].some(t => t.touchType === 'stylus') && e.target.closest('#pad, .page.lasso')) e.preventDefault(); }, { passive: false });
   $('#openFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openFile(f); };
   $('#exportBtn').onclick = exportPdf;
   const inkBtns = document.querySelectorAll('.ink');
@@ -488,12 +534,12 @@ async function runTests() { // open with ?test
 }
 
 (async function init() {
-  buildBoxes(); wire();
+  buildTeach(); wire();
   try { const h = await db.get('hand'); if (h && h.g) hand = h; } catch { toast('This browser blocks saving — use ⋯ → Save my handwriting file.', 6000); }
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { }
   const refs = fetch('refs.json').then(r => r.json()).then(H.setRefs).catch(e => console.warn('reference hands', e)); // without them letters still vary, just less
   try { font = opentype.parse(await (await fetch('lib/Sriracha-Regular.ttf')).arrayBuffer()); } catch (e) { console.warn('fallback font', e); }
-  await refs;
+  await refs; lastDone = taught();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (/[?&]test\b/.test(location.search)) return runTests();
   showTab(LS.get('tab', 'teach'));

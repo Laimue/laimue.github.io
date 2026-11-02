@@ -6,6 +6,7 @@ LaiMue's reference hands (`refs.json`) are centre lines traced from these source
 - **Google Fonts** (SIL Open Font License 1.1): Mali, Itim, Charm, Charmonman, Srisakdi, Playpen Sans Thai, Sarabun, Niramit, Kodchasan, KoHo, Krub, K2D, Fahkwang, Thasadith, Taviraj, Trirong, Pridi, Maitree, Chonburi, Pattaya, Noto Sans Thai Looped, Noto Serif Thai, IBM Plex Sans Thai Looped, Prompt, Kanit, Mitr, Athiti, Anuphan, Bai Jamjuree, Chakra Petch, Noto Sans Thai, IBM Plex Sans Thai.
 - **TLWG fonts-tlwg** (GPL with font exception): Purisa, Garuda, Kinnari, Loma, Norasi, Sawasdee, Umpush, Waree, Laksaman, Tlwg Typist, Tlwg Typo.
 - **Sriracha** (SIL OFL 1.1, Cadson Demak): the typed letter, `lib/Sriracha-Regular.ttf`.
+- **Kanit** (SIL OFL 1.1, Cadson Demak): headings, `lib/fonts/kanit-*.woff2` (Google Fonts Thai + Latin subsets).
 
 ## Handwriting datasets
 Only averages of groups of 15 or more samples are used. No single person's writing and no images are included.
