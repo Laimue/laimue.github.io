@@ -26,6 +26,7 @@
       <button id="saveHand">💾 Save my handwriting file</button>
       <button id="loadHand">📂 Load handwriting file</button>
       <input id="loadHandFile" type="file" accept=".json,application/json" hidden>
+      <div id="ver"></div>
     </div>
   </div>
 </header>
@@ -57,6 +58,7 @@
     <div class="row">
       <label>Size <input id="sz" type="range" min="3" max="40" step="0.25"></label>
       <label>Line gap <input id="lg" type="range" min="1.6" max="4" step="0.05"></label>
+      <label title="Left = natural, right = neat">Natural <input id="nt" type="range" min="0" max="1" step="0.05" aria-label="Neatness: natural to neat"> Neat</label>
       <button id="shuf">🎲 Reshuffle</button>
       <button id="del">🗑</button>
       <button id="done">Done</button>

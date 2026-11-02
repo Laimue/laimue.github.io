@@ -170,7 +170,7 @@ const step = d => { page = (page + d + PAGES) % PAGES; renderTeach(); scrollTo(0
 // ---------- Worksheet screen
 let sheet = null, sel = null, down = null;
 const ink = { color: LS.get('color', '#1a1a1a'), thick: LS.get('thick', 1) };
-const lay = b => H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick });
+const lay = b => H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1 });
 const pathD = (arrs, close) => arrs.map(a => {
   let s = 'M' + a[0].toFixed(2) + ' ' + a[1].toFixed(2) + (a.length === 2 ? 'l0.01 0' : '');
   for (let i = 2; i < a.length; i += 2) s += 'L' + a[i].toFixed(2) + ' ' + a[i + 1].toFixed(2);
@@ -229,7 +229,7 @@ function pageEvents(pg) {
     if (!d || e.target.closest('.tbox') || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10 || Date.now() - d.t > 700) return;
     if (sel) return select(null); // first tap outside just closes the open box
     const [x, y] = toPage(pg, e), u = LS.get('u', 0) || +(pg.w * 0.016).toFixed(2), gap = LS.get('gap', 2.4);
-    const box = { x: Math.max(0, x - 2), y: y - 1.75 * u, w: Math.max(60, Math.min(pg.w * 0.45, pg.w - x - 4)), u, gap, seed: (Math.random() * 1e9) | 0, text: '' };
+    const box = { x: Math.max(0, x - 2), y: y - 1.75 * u, w: Math.max(60, Math.min(pg.w * 0.45, pg.w - x - 4)), u, gap, neat: LS.get('neat', 1), seed: (Math.random() * 1e9) | 0, text: '' };
     pg.boxes.push(box); addBoxEl(pg, box); renderInk(pg); select({ pg, box }, true);
   });
 }
@@ -271,7 +271,7 @@ function select(s, focus) {
   if (sel) { sel.box.el.classList.remove('on'); if ((!s || s.box !== sel.box) && !sel.box.text.trim()) removeBox(sel); }
   sel = s; $('#panel').hidden = !s;
   if (!s) { $('#txt').blur(); return; }
-  s.box.el.classList.add('on'); $('#txt').value = s.box.text; $('#sz').value = s.box.u; $('#lg').value = s.box.gap;
+  s.box.el.classList.add('on'); $('#txt').value = s.box.text; $('#sz').value = s.box.u; $('#lg').value = s.box.gap; $('#nt').value = s.box.neat ?? 1;
   if (focus) $('#txt').focus({ preventScroll: true });
 }
 const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255);
@@ -343,6 +343,8 @@ function wire() {
   $('#txt').oninput = () => { if (sel) { sel.box.text = $('#txt').value; renderInk(sel.pg); } };
   $('#sz').oninput = () => { if (sel) { sel.box.u = +$('#sz').value; LS.set('u', sel.box.u); renderInk(sel.pg); } };
   $('#lg').oninput = () => { if (sel) { sel.box.gap = +$('#lg').value; LS.set('gap', sel.box.gap); renderInk(sel.pg); } };
+  $('#nt').oninput = () => { if (sel) { sel.box.neat = +$('#nt').value; LS.set('neat', sel.box.neat); renderInk(sel.pg); } };
+  $('#ver').textContent = 'LaiMue version ' + H.VERSION;
   $('#shuf').onclick = () => { if (sel) { sel.box.seed = (Math.random() * 1e9) | 0; renderInk(sel.pg); } };
   $('#del').onclick = () => { if (!sel) return; const s = sel; sel = null; $('#panel').hidden = true; removeBox(s); };
   $('#done').onclick = () => select(null);
@@ -358,6 +360,8 @@ async function runTests() { // open with ?test
   const doc = await PDFLib.PDFDocument.create(); doc.addPage([595, 420]);
   await openPdf('test.pdf', (await doc.save()).slice().buffer);
   const pg = sheet.pages[0], box = { x: 30, y: 30, w: 530, u: 12, gap: 2.4, seed: 7, text: 'สวัสดีครับ ปู่น้ำกั๊ก ญี่ปุ่น ฎุ เกียรติ ป้า ปี่ ศักดิ์ ฤดู ทำน้ำ\nLaiMue 123 ๑๒๓ (ทดสอบ) ภาษาไทยเป็นภาษาที่สวยงามมาก' };
+  hand = H.fakeHand(fb, 11, true); // messy fake person, only in memory (never saved)
+  for (const [y, neat] of [[150, 1], [250, 0]]) { const b = { x: 30, y, w: 530, u: 16, gap: 2.4, seed: 7, neat, text: (neat ? 'Neat: ' : 'Natural: ') + 'สวัสดี ทดสอบ ปู่น้ำกั๊ก' }; pg.boxes.push(b); addBoxEl(pg, b); }
   pg.boxes.push(box); addBoxEl(pg, box); renderInk(pg);
   let ok = false;
   try {

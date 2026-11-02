@@ -1,6 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
+  const VERSION = 5; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -74,33 +75,83 @@
     return p.length ? { p } : null;
   }
 
-  // This person's usual size: median of (reference height / drawn height) over their consonants.
-  function personScale(hand, fb) {
-    const ks = [];
+  // Pencil shake: two light [1,2,1] passes per stroke, ends kept (points are >=0.012 apart, loops shrink ~2%).
+  const smooth = s => s.map(a => {
+    let p = a;
+    for (let n = 0; n < 2; n++) {
+      const q = p.slice();
+      for (let i = 2; i < p.length - 2; i += 2) { q[i] = (p[i - 2] + 2 * p[i] + p[i + 2]) / 4; q[i + 1] = (p[i - 1] + 2 * p[i + 1] + p[i + 3]) / 4; }
+      p = q;
+    }
+    return p;
+  });
+  const SM = new WeakMap(), SL = new WeakMap(), SLP = new WeakMap(); const SLANT_SURE = 1.35; // peak sharpness vs ±0.2 away; round letters score ~1.1, upright-stroke letters 1.5-2.9
+  const sm = v => { let w = SM.get(v); if (!w) SM.set(v, w = { s: smooth(v.s) }); return w; };
+  // Writing slant (sideways move per unit down, italic < 0): the shear that stacks the up-down pen moves
+  // into the sharpest columns. Shearing a letter by c shifts this by exactly c, whoever wrote it. null = too few up-down moves.
+  function slant(v) {
+    if (SL.has(v)) return SL.get(v);
+    const sg = [], b = bbox(v), my = (b.y0 + b.y1) / 2; let tot = 0;
+    for (const a of v.s || v.p) for (let i = 2; i < a.length; i += 2) {
+      const dy = Math.abs(a[i + 1] - a[i - 1]); if (dy < 1e-4) continue;
+      sg.push((a[i] + a[i - 2]) / 2, (a[i + 1] + a[i - 1]) / 2 - my, dy); tot += dy;
+    }
+    let r = null;
+    if (tot > 0.4 * (b.y1 - b.y0)) {
+      const sc = [];
+      for (let n = 0; n <= 60; n++) {
+        const c = n * 0.02 - 0.6, h = new Map();
+        for (let i = 0; i < sg.length; i += 3) { // spread each move over two 0.025-wide columns
+          const x = (sg[i] - c * sg[i + 1]) / 0.025, k = Math.floor(x), f = x - k;
+          h.set(k, (h.get(k) || 0) + sg[i + 2] * (1 - f)); h.set(k + 1, (h.get(k + 1) || 0) + sg[i + 2] * f);
+        }
+        let s = 0; for (const q of h.values()) s += q * q; sc.push(s);
+      }
+      const n = sc.indexOf(Math.max(...sc)), side = Math.max(...sc.filter((_, j) => Math.abs(j - n) >= 10)); // best rival lean ≥0.2 away
+      SLP.set(v, sc[n] / side);
+      if (sc[n] / side > SLANT_SURE) r = +(n * 0.02 - 0.6).toFixed(2); // round letters (อ ว) have no clear lean: leave them
+    }
+    SL.set(v, r); return r;
+  }
+  // This person's usual size (median reference height / drawn height) and usual lean compared with the
+  // reference font, letter by letter (so letters that are slanted by design, like ง จ, keep their shape).
+  function person(hand, fb) {
+    const ks = [], ss = [], med = a => a.sort((x, y) => x - y)[a.length >> 1];
     if (hand && hand.g && fb) for (const ch of GROUPS[0][1]) for (const v of hand.g[ch] || []) {
       const r = v && v.s && v.s.length && fb(ch); if (!r) continue;
       const u = bbox(v), f = bbox(r); ks.push((f.y1 - f.y0) / Math.max(u.y1 - u.y0, 0.02));
+      const s = slant(sm(v)), sr = slant(r); if (s !== null && sr !== null) ss.push(s - sr);
     }
-    ks.sort((a, b) => a - b); return ks.length ? ks[ks.length >> 1] : 0;
+    return { k: ks.length ? med(ks) : 0, sl: ss.length ? med(ss) : null };
   }
-  // Drawn letters float and vary in size: move each onto the line where the reference font puts
-  // that letter, at the reference height (kept within ±25% of this person's usual size).
+  // Drawn letters float, lean and vary in size: smooth the pen, lean each like this person's usual slant,
+  // then move it onto the line where the reference font puts that letter, at the reference size.
   const NORM = new WeakMap();
-  function normalize(v, ch, fb, S) {
+  function normalize(v, ch, fb, P) {
     const ref = fb && fb(ch); if (!ref) return v;
-    const c = NORM.get(v); if (c && c.S === S) return c.v;
-    const u = bbox(v), f = bbox(ref);
-    let k = (f.y1 - f.y0) / Math.max(u.y1 - u.y0, 0.02);
+    const key = P.k + '|' + P.sl, c = NORM.get(v); if (c && c.key === key) return c.v;
+    let w = sm(v), tot = 0;
+    const want = P.sl !== null && slant(ref) !== null ? slant(ref) + P.sl : null; // this letter's font lean + the person's usual extra lean
+    if (want !== null) for (let n = 0; n < 3; n++) { // re-measure once or twice: the column grid is 0.02 coarse
+      const s = slant(w); if (s === null || Math.abs(want - s) < 0.015) break;
+      const b = bbox(w), my = (b.y0 + b.y1) / 2, d = Math.min(Math.max(want - s, -0.3 - tot), 0.3 - tot);
+      tot += d; w = { s: w.s.map(a => a.map((q, i) => i % 2 ? q : q + d * (a[i + 1] - my))) };
+    }
+    const u = bbox(w), f = bbox(ref), S = P.k || 1;
     const mark = needsGhost(ch), plain = !mark && f.y0 >= XH - 0.15 && f.y1 <= BASE + 0.15; // no tail: exact same height
-    if (S && !plain) k = Math.min(Math.max(k, 0.75 * S), 1.25 * S);
+    const kh = (f.y1 - f.y0) / Math.max(u.y1 - u.y0, 0.02), kw = (f.x1 - f.x0) / Math.max(u.x1 - u.x0, 0.02);
+    let k = kh;
+    // the clamps only guard against odd drawings (a flat mark, a giant tail)
+    if (mark) k = Math.min(Math.max(Math.hypot(f.x1 - f.x0, f.y1 - f.y0) / Math.max(Math.hypot(u.x1 - u.x0, u.y1 - u.y0), 0.02), 0.6 * S), 1.6 * S);
+    else if (!plain) k = Math.min(Math.max(Math.sqrt(kh * kw), 0.65 * S), 1.35 * S); // width ignores how long the tail was drawn
     const topAlign = LOWER.has(ch) || (!mark && f.y1 > BASE + 0.15); // hang below-line letters from the top
     const ty = topAlign ? f.y0 - u.y0 * k : f.y1 - u.y1 * k, tx = mark ? f.x1 - u.x1 * k : GX - u.x0 * k;
-    const out = { s: v.s.map(a => a.map((q, i) => +(i % 2 ? q * k + ty : q * k + tx).toFixed(4))) };
-    NORM.set(v, { S, v: out }); return out;
+    const out = { s: w.s.map(a => a.map((q, i) => +(i % 2 ? q * k + ty : q * k + tx).toFixed(4))) };
+    NORM.set(v, { key, v: out }); return out;
   }
 
-  function variantsFor(hand, ch, fb, S) {
-    const drawn = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length).map(v => normalize(v, ch, fb, S));
+  function variantsFor(hand, ch, fb, P) {
+    const drawn = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length).map(v => normalize(v, ch, fb, P));
     if (drawn.length) return drawn;
     const f = synth(ch) || (fb && fb(ch)); return f ? [f] : [];
   }
@@ -118,23 +169,36 @@
     return out;
   }
 
+  // Top of the ink between x0 and x1 (XH if none there), kept near the x-height.
+  function inkTop(v, x0, x1) {
+    let m = Infinity;
+    for (const a of (v.s || v.p)) for (let i = 0; i < a.length; i += 2) if (a[i] >= x0 && a[i] <= x1 && a[i + 1] < m) m = a[i + 1];
+    return m < Infinity ? Math.min(Math.max(m, XH - 0.35), XH + 0.1) : XH;
+  }
+
   // Place one cluster's parts in box units. Marks are drawn beside a grey ก, so they are
-  // moved by (base right edge - ghost right edge). Tones climb above upper vowels / the ring of ำ.
+  // moved by (base right edge - ghost right edge). Upper vowels sit just above the ink under them;
+  // tones sit just above the upper vowel / ring of ำ, or just above the letter when there is none.
   function buildCluster(cl, pick) {
     const parts = [], b = cl.base ? pick(cl.base) : null;
     const bb = b ? bbox(b) : { x0: GX, x1: GHOST.r, y0: XH, y1: BASE };
     if (b) parts.push({ v: b, dx: 0, dy: 0 });
     const tl = b && TALL.has(cl.base) ? tailLeft(b) : Infinity, mx0 = bb.x1 - GHOST.r;
     const mxOf = v => tl < Infinity ? Math.min(mx0, tl - 0.04 - bbox(v).x1) : mx0; // keep marks left of a tall tail
+    // ink top a little wider than the mark (so it clears rounded corners), never reaching a tall tail
+    const under = (v, dx) => b ? inkTop(b, bbox(v).x0 + dx - 0.25, Math.min(bbox(v).x1 + dx + 0.25, tl - 0.02)) : XH;
     let top = Infinity, x1 = bb.x1;
-    const add = (v, dx, dy) => { parts.push({ v, dx, dy }); return bbox(v); };
-    for (const m of cl.marks) if (UPPER.has(m)) { const v = pick(m); if (v) top = Math.min(top, add(v, mxOf(v), 0).y0); }
-    if (cl.am) { const v = pick(AM); if (v) { const q = add(v, mx0, 0); top = Math.min(top, q.y0); x1 = Math.max(x1, q.x1 + mx0); } }
+    const add = (v, dx, dy) => { parts.push({ v, dx, dy }); const q = bbox(v); return { y0: q.y0 + dy, x1: q.x1 + dx }; };
+    for (const m of cl.marks) if (UPPER.has(m)) {
+      const v = pick(m); if (!v) continue;
+      const dx = mxOf(v); top = Math.min(top, add(v, dx, under(v, dx) - 0.1 - bbox(v).y1).y0);
+    }
+    if (cl.am) { const v = pick(AM); if (v) { const q = add(v, mx0, 0); top = Math.min(top, q.y0); x1 = Math.max(x1, q.x1); } }
     for (const m of cl.marks) if (LOWER.has(m)) { const v = pick(m); if (v) add(v, bb.x1 - GHOST.r, bb.y1 > BASE + 0.15 ? bb.y1 - BASE - 0.05 : 0); }
     for (const m of cl.marks) if (TOP.has(m)) {
       const v = pick(m); if (!v) continue;
-      const q = bbox(v), dy = top < Infinity ? Math.min(0, top - 0.06 - q.y1) : 0;
-      add(v, mxOf(v), dy); top = Math.min(top, q.y0 + dy);
+      const dx = mxOf(v), dy = (top < Infinity ? top - 0.06 : under(v, dx) - 0.1) - bbox(v).y1;
+      top = Math.min(top, add(v, dx, dy).y0);
     }
     return { parts, x0: bb.x0, x1 };
   }
@@ -150,23 +214,46 @@
     return out.filter(s => s !== '');
   }
 
-  // o: {x, y, width, u (page units per box unit), gap (line height in box units), seed, fb, thick}
+  // Left/right ink edge per 0.2-tall band in item-local page units, widened one band up and down
+  // so letters never tuck into a narrow notch of their neighbour.
+  const NB = 16, BH = 0.2;
+  function profile(it) {
+    const L = new Array(NB).fill(Infinity), Rt = new Array(NB).fill(-Infinity);
+    const put = (x, y) => {
+      const px = it.sc * ((x - it.x0) * it.sw - (y - BASE) * it.sh), j0 = Math.floor(y / BH);
+      for (let j = Math.max(0, j0 - 1); j <= Math.min(NB - 1, j0 + 1); j++) { if (px < L[j]) L[j] = px; if (px > Rt[j]) Rt[j] = px; }
+    };
+    for (const p of it.parts) for (const a of (p.v.s || p.v.p)) for (let i = 0; i < a.length; i += 2) {
+      const n = i ? Math.ceil(Math.hypot(a[i] - a[i - 2], a[i + 1] - a[i - 1]) / 0.1) : 1; // fill long straight lines
+      for (let t = 1; t <= n; t++) put((i ? a[i - 2] + (a[i] - a[i - 2]) * t / n : a[i]) + p.dx, (i ? a[i - 1] + (a[i + 1] - a[i - 1]) * t / n : a[i + 1]) + p.dy);
+    }
+    return { L, R: Rt };
+  }
+  // How far the next cluster's start must sit from the previous one's so the visible gap is right: closest approach in any shared band.
+  function kern(a, b) {
+    let d = -Infinity;
+    for (let j = 0; j < NB; j++) if (a.pr.R[j] > -Infinity && b.pr.L[j] < Infinity) d = Math.max(d, a.pr.R[j] - b.pr.L[j]);
+    return d;
+  }
+
+  // o: {x, y, width, u (page units per box unit), gap (line height in box units), seed, fb, thick, neat (0 natural .. 1 neat, default 1)}
   function layout(text, hand, o) {
-    const R = rng(o.seed || 1), last = {}, cache = {}, S = personScale(hand, o.fb);
+    const R = rng(o.seed || 1), last = {}, cache = {}, P = person(hand, o.fb);
     const pick = ch => {
-      const vs = cache[ch] || (cache[ch] = variantsFor(hand, ch, o.fb, S)); if (!vs.length) return null;
+      const vs = cache[ch] || (cache[ch] = variantsFor(hand, ch, o.fb, P)); if (!vs.length) return null;
       let i = (R() * vs.length) | 0;
       if (vs.length > 1 && i === last[ch]) i = (i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length;
       last[ch] = i; return vs[i];
     };
-    const J = a => (R() - 0.5) * 2 * a;
+    const mess = 0.8 - 0.6 * (o.neat ?? 1); // neat = 0.2x the old wobble, natural = 0.8x
+    const J = a => (R() - 0.5) * 2 * a * mess;
     const warp = () => ({ ax: J(0.03), ay: J(0.03), fx: 3 + R() * 4, fy: 3 + R() * 4, px: R() * 6.3, py: R() * 6.3 });
     const maxW = o.width / o.u, L = o.gap || 2.4, U = o.u;
     const strokes = [], fills = [];
     let cx = 0, line = 0, phase = R() * 6.3, wrapped = false;
     const newline = auto => { line++; cx = 0; phase = R() * 6.3; wrapped = auto; };
     const emit = it => {
-      const by = FIRST + line * L + 0.06 * Math.sin(cx * 0.35 + phase) + it.jy;
+      const by = FIRST + line * L + 0.06 * mess * Math.sin(cx * 0.35 + phase) + it.jy;
       const c = Math.cos(it.th), s = Math.sin(it.th);
       it.parts.forEach((p, k) => {
         const w = it.warps[k], list = p.v.s ? strokes : fills;
@@ -191,21 +278,51 @@
     for (const seg of words(text)) {
       if (seg === '\n') { newline(false); continue; }
       const sh = J(0.06); // each word leans its own way a little
+      let prev = null;
       const items = parse(seg).map(cl => {
-        if (cl.sp) return { sp: true, w: 0.45 + J(0.06) };
+        if (cl.sp) { prev = null; return { sp: true, w: 0.45 + J(0.06) }; }
         const b = buildCluster(cl, pick), sc = 1 + J(0.04), sw = 1 + J(0.05);
         const w = b.parts.length ? sc * sw * (b.x1 - b.x0) : 0.5;
-        return { ...b, sc, sw, sh, w, gap: 0.13 + J(0.03), th: J(0.035), jy: J(0.02), warps: b.parts.map(warp) };
+        const it = { ...b, sc, sw, sh, w, gap: 0.13 + J(0.03), th: J(0.035), jy: J(0.02), warps: b.parts.map(warp), dk: 0 };
+        if (b.parts.length) {
+          it.pr = profile(it);
+          const d = prev ? kern(prev, it) : -Infinity; // space by the visible gap, not the boxes
+          if (d > -Infinity) it.dk = Math.min(Math.max(d - prev.w, -0.35), 0.3);
+          prev = it;
+        }
+        return it;
       });
-      const ww = items.reduce((t, it) => t + it.w + (it.gap || 0), 0);
+      const ww = items.reduce((t, it) => t + it.w + (it.gap || 0) + (it.dk || 0), 0);
       if (cx > 0 && cx + ww > maxW && !items[0].sp) newline(true);
       for (const it of items) {
         if (it.sp) { if (!(cx === 0 && wrapped)) cx += it.w; continue; }
-        if (cx > 0 && cx + it.w > maxW) newline(true); // word longer than the box
+        if (cx > 0 && cx + it.dk + it.w > maxW) newline(true); else cx += it.dk; // word longer than the box
         emit(it); cx += it.w + it.gap; wrapped = false;
       }
     }
     return { strokes, fills, lines: line + 1, height: (FIRST + line * L + 0.85) * U, lw: U * 0.075 * (o.thick || 1) };
+  }
+
+  // Test helper: a fake person drawn from the font outlines (as pen lines). messy: each letter at its own
+  // size, height and slant with a shaky pen; marks drawn big, small, high or low over the grey ก.
+  function fakeHand(fb, seed, messy, lean = -0.12) { // lean: this fake person's usual slant (italic < 0)
+    const R = rng(seed), J = a => messy ? (R() - 0.5) * 2 * a : 0, g = {};
+    for (const [, chars] of GROUPS.slice(0, 3)) for (const ch of chars) {
+      const f = fb(ch); if (!f || !f.p) continue;
+      const b = bbox(f), mk = needsGhost(ch);
+      g[ch] = [0, 1, 2].slice(0, messy ? 3 : 1).map(() => {
+        const k = messy ? (mk ? 0.65 + R() * 0.95 : 0.7 + R() * 0.6) : 1, dy = J(mk ? 0.4 : 0.3), sl = messy ? lean + J(0.15) : 0;
+        return { s: f.p.map(a => {
+          const o = [];
+          for (let i = 0; i <= a.length; i += 2) {
+            const ry = (a[(i + 1) % a.length] - b.y1) * k;
+            o.push(b.x0 + (a[i % a.length] - b.x0) * k + sl * ry + J(0.012), b.y1 + ry + dy + J(0.012));
+          }
+          return o;
+        }) };
+      });
+    }
+    return { g };
   }
 
   // Engine checks using the fallback font. Returns [{name, ok, info}].
@@ -236,14 +353,55 @@
     const sy = layout('(?!) 5% a/b', null, { x: 0, y: 0, width: 999, u: 10, seed: 2, fb });
     // a small ก floating high and a ่ drawn too low get put back on their lines
     const fake = { g: { 'ก': [{ s: [[0.5, 0.6, 0.9, 0.5, 1.0, 1.0]] }], '่': [{ s: [[1.0, 1.3, 1.0, 1.6]] }] } };
-    const nk = bbox(variantsFor(fake, 'ก', fb, 0)[0]), fk = bbox(fb('ก'));
+    const nk = bbox(variantsFor(fake, 'ก', fb, { k: 0, sl: null })[0]), fk = bbox(fb('ก'));
     t('floating letter lands on the line, normal size', Math.abs(nk.y1 - fk.y1) < 0.01 && Math.abs((nk.y1 - nk.y0) - (fk.y1 - fk.y0)) < 0.01, nk.y0.toFixed(2) + '..' + nk.y1.toFixed(2));
-    const nt = bbox(variantsFor(fake, '่', fb, personScale(fake, fb))[0]);
+    const nt = bbox(variantsFor(fake, '่', fb, person(fake, fb))[0]);
     t('low tone mark moves up above the letter', nt.y1 <= XH, nt.y1.toFixed(2) + ' <= 1');
     t('symbols are auto-made pen strokes', sy.strokes.length === 10, sy.strokes.length + ' strokes');
+
+    // A messy fake person: own size/height/slant per letter, shaky pen, marks big/small/high/low.
+    const mh = fakeHand(fb, 11, true), MP = person(mh, fb), pickH = h => ch => variantsFor(h, ch, fb, MP)[0] || fb(ch);
+    const ht = q => q.y1 - q.y0;
+    let mInfo = '';
+    for (const m of 'ัี่้') for (const v of mh.g[m]) {
+      const bx = buildCluster(parse('ก' + m)[0], pickH({ g: { ...mh.g, [m]: [v] } })).parts.map(box);
+      const gap = bx[0].y0 - bx[1].y1, hr = ht(bx[1]) / ht(bbox(fb(m)));
+      if (!(gap >= 0.04 && gap <= 0.16 && hr > 0.85 && hr < 1.15)) mInfo += m + ' gap ' + gap.toFixed(2) + ' size ' + hr.toFixed(2) + '; ';
+    }
+    t('marks drawn big/small/high/low land just above the letter', !mInfo, mInfo);
+    const kv = buildCluster(parse('กี่')[0], pickH(mh)).parts.map(box), tg = kv[1].y0 - kv[2].y1;
+    t('tone sits close above the vowel', tg >= 0 && tg <= 0.12, tg.toFixed(2));
+    const spread = (h, neat) => { // spread of letter bottoms and heights in a row of ก
+      const n = h.g['ก'][0].s.length, L = layout('กกกกกกกกกกกก', h, { x: 0, y: 0, width: 1e4, u: 1, seed: 4, fb, neat });
+      const bot = [], hs = [], sd = a => { const m = a.reduce((s, x) => s + x, 0) / a.length; return [Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length), m]; };
+      for (let i = 0; i < L.strokes.length; i += n) { const q = bbox({ s: L.strokes.slice(i, i + n) }); bot.push(q.y1); hs.push(q.y1 - q.y0); }
+      const [hsd, hm] = sd(hs); return { b: sd(bot)[0], h: hsd / hm };
+    };
+    const sn = spread(mh, 1), sx = spread(mh, 0);
+    t('neat: messy drawings come out even', sn.b < 0.03 && sn.h < 0.04, 'bottoms ±' + sn.b.toFixed(3) + ', heights ±' + (sn.h * 100).toFixed(1) + '%');
+    t('natural is looser than neat', sx.b > sn.b && sx.h > sn.h, 'natural bottoms ±' + sx.b.toFixed(3));
+    // Three different people (right-leaning, upright, left-leaning): each keeps their own slant, all come out even.
+    let pInfo = '', pOk = true;
+    for (const [seed, lean] of [[11, -0.12], [23, 0], [37, 0.15]]) {
+      const h = seed === 11 ? mh : fakeHand(fb, seed, true, lean), Q = person(h, fb), e = spread(h, 1);
+      let worst = 0;
+      for (const ch of GROUPS[0][1]) h.g[ch].forEach((v, i) => { // only letters with a clear lean get straightened
+        const s = slant(variantsFor(h, ch, fb, Q)[i]), sr = slant(fb(ch));
+        if (slant(sm(v)) !== null && s !== null && sr !== null) worst = Math.max(worst, Math.abs(s - sr - Q.sl));
+      });
+      const ok = Q.sl !== null && Math.abs(Q.sl - lean) < 0.08 && worst < 0.07 && e.b < 0.03 && e.h < 0.04;
+      pOk = pOk && ok; pInfo += `lean ${lean}: usual ${(Q.sl || 0).toFixed(2)}, worst ${worst.toFixed(3)}${ok ? '' : ' ✗'}; `;
+    }
+    t('3 different people: each keeps their own slant, odd letters match it', pOk, pInfo);
+    const shaky = [[]]; for (let i = 0; i <= 60; i++) shaky[0].push(0.5 + (i % 2 ? 0.02 : -0.02), 1 + i / 60);
+    const rough = s => { let q = 0; const a = s[0]; for (let i = 2; i < a.length - 2; i += 2) q += Math.abs(a[i - 2] - 2 * a[i] + a[i + 2]); return q; };
+    t('shaky strokes get smoothed', rough(smooth(shaky)) < 0.3 * rough(shaky), rough(smooth(shaky)).toFixed(2) + ' vs ' + rough(shaky).toFixed(2));
+    const g2 = layout('กอ', mh, { x: 0, y: 0, width: 1e4, u: 1, seed: 4, fb }), na = mh.g['ก'][0].s.length;
+    const vg = bbox({ s: g2.strokes.slice(na) }).x0 - bbox({ s: g2.strokes.slice(0, na) }).x1;
+    t('letters keep a small visible gap', vg > 0.05 && vg < 0.25, vg.toFixed(2));
     return r;
   }
 
-  const API = { XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, selfTest };
+  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.Hand = API;
 })(this);
