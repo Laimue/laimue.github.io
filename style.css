@@ -1,0 +1,51 @@
+:root { --bg: #f5f6fa; --fg: #1c2033; --muted: #6b7280; --card: #fff; --line: #d9dce5; --acc: #1f3b9b; }
+@media (prefers-color-scheme: dark) { :root { --bg: #14161f; --fg: #e8eaf2; --muted: #9aa0b2; --card: #1e2130; --line: #353a4d; --acc: #7d9bff; } }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.4 system-ui, -apple-system, "Leelawadee UI", "Noto Sans Thai", sans-serif; padding-bottom: env(safe-area-inset-bottom); }
+button { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; cursor: pointer; }
+button:disabled { opacity: .4; }
+header { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 12px; padding: 8px 16px; padding-top: max(8px, env(safe-area-inset-top)); background: var(--card); border-bottom: 1px solid var(--line); }
+.logo { font-size: 20px; } .logo small { color: var(--muted); font-weight: 400; font-size: 13px; }
+nav { display: flex; gap: 6px; flex: 1; }
+.tab.on { background: var(--acc); color: #fff; border-color: var(--acc); }
+.menu { position: relative; }
+#menuList { position: absolute; right: 0; top: 44px; display: flex; flex-direction: column; gap: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 8px; width: 260px; box-shadow: 0 8px 24px #0003; }
+#menuList button { text-align: left; }
+#installHint { background: #fff4cc; color: #3d3200; padding: 8px 16px; font-size: 14px; }
+section { padding: 12px 16px; max-width: 1200px; margin: 0 auto; }
+.hint { color: var(--muted); font-size: 14px; margin: 6px 0; }
+.row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bar { display: flex; align-items: center; justify-content: center; gap: 16px; }
+.bar button { font-size: 28px; width: 56px; height: 56px; }
+.cur { text-align: center; min-width: 160px; }
+#ch { font-size: 44px; line-height: 1.1; }
+#chInfo { color: var(--muted); font-size: 13px; }
+#boxes { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 10px 0; }
+@media (max-width: 560px) { #boxes { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.box { display: flex; flex-direction: column; gap: 4px; }
+.box canvas { width: 100%; aspect-ratio: 16 / 26; background: #fff; border: 1px solid var(--line); border-radius: 10px; touch-action: none; -webkit-user-select: none; user-select: none; }
+.box .row { justify-content: center; gap: 6px; }
+.box .row button { padding: 4px 10px; }
+.prog { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 8px 0; }
+#progFill { height: 100%; background: var(--acc); width: 0; }
+#grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+#grid h4 { width: 100%; margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+#grid button { min-width: 44px; padding: 6px; font-size: 20px; }
+#grid .c0 { opacity: .55; } #grid .c1 { border-color: #f0b429; } #grid .c5 { border-color: #2f9e44; background: #2f9e4418; }
+.tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sw { display: inline-flex; gap: 6px; }
+.ink { width: 32px; height: 32px; border-radius: 50%; padding: 0; }
+.ink.on { outline: 3px solid var(--acc); outline-offset: 2px; }
+#panel { position: sticky; top: 60px; z-index: 15; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px; margin: 10px 0; box-shadow: 0 6px 20px #0002; }
+#txt { width: 100%; font: 18px/1.5 system-ui, "Leelawadee UI", sans-serif; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--bg); color: var(--fg); }
+#pages { display: flex; flex-direction: column; gap: 16px; align-items: center; margin-top: 10px; }
+.page { position: relative; width: 100%; background: #fff; box-shadow: 0 2px 12px #0002; }
+.page canvas, .page svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.page svg { pointer-events: none; }
+.tbox { position: absolute; border: 1.5px dashed #1f3b9b55; border-radius: 4px; touch-action: none; cursor: move; min-height: 12px; }
+.tbox.on { border-color: #1f3b9b; background: #1f3b9b0d; }
+.tbox .grip { position: absolute; right: -11px; top: 50%; width: 22px; height: 34px; margin-top: -17px; border-radius: 8px; background: #1f3b9b; opacity: .75; cursor: ew-resize; touch-action: none; }
+#toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: #1c2033; color: #fff; padding: 10px 16px; border-radius: 10px; z-index: 50; max-width: 90vw; }
+#testOut { margin: 16px auto; max-width: 900px; font: 14px monospace; }
+#testOut canvas { width: 100%; border: 1px solid var(--line); background: #fff; }

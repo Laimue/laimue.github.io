@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LaiMue ลายมือ</title>
+<meta name="theme-color" content="#1f3b9b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="LaiMue">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <b class="logo">ลายมือ <small>LaiMue</small></b>
+  <nav>
+    <button data-tab="teach" class="tab">✍️ สอนลายมือ</button>
+    <button data-tab="sheet" class="tab">📄 ใบงาน</button>
+  </nav>
+  <div class="menu">
+    <button id="menuBtn" aria-label="Menu">⋯</button>
+    <div id="menuList" hidden>
+      <button id="saveHand">💾 Save my handwriting file</button>
+      <button id="loadHand">📂 Load handwriting file</button>
+      <input id="loadHandFile" type="file" accept=".json,application/json" hidden>
+    </div>
+  </div>
+</header>
+<div id="installHint" hidden>On iPad: tap <b>Share</b> → <b>Add to Home Screen</b> so your handwriting stays saved. <button id="hideHint">OK</button></div>
+
+<section id="teach" hidden>
+  <div class="bar">
+    <button id="prev" aria-label="Previous">‹</button>
+    <div class="cur"><div id="ch"></div><div id="chInfo"></div></div>
+    <button id="next" aria-label="Next">›</button>
+  </div>
+  <p class="hint">Write the letter once in each box. Fill 1–5 boxes (more = more natural). Grey ก shows where the mark goes.</p>
+  <div id="boxes"></div>
+  <div class="prog"><div id="progFill"></div></div>
+  <div class="row"><span id="progText"></span><button id="allBtn">All letters</button></div>
+  <div id="grid" hidden></div>
+</section>
+
+<section id="sheet" hidden>
+  <div class="tools">
+    <button id="openBtn">📂 Open worksheet</button>
+    <input id="openFile" type="file" accept="application/pdf,image/*" hidden>
+    <button id="exportBtn" disabled>💾 Save PDF</button>
+    <span class="sw"><button class="ink" data-c="#1a1a1a" style="background:#1a1a1a" aria-label="Black ink"></button><button class="ink" data-c="#1f3b9b" style="background:#1f3b9b" aria-label="Blue ink"></button></span>
+    <label>Pen <input id="thick" type="range" min="0.5" max="2" step="0.05"></label>
+  </div>
+  <div id="panel" hidden>
+    <textarea id="txt" rows="3" lang="th" placeholder="พิมพ์คำตอบที่นี่…"></textarea>
+    <div class="row">
+      <label>Size <input id="sz" type="range" min="3" max="40" step="0.25"></label>
+      <label>Line gap <input id="lg" type="range" min="1.6" max="4" step="0.05"></label>
+      <button id="shuf">🎲 Reshuffle</button>
+      <button id="del">🗑</button>
+      <button id="done">Done</button>
+    </div>
+  </div>
+  <p id="sheetHint" class="hint">Open a PDF or photo of your worksheet, then tap where an answer goes.</p>
+  <div id="pages"></div>
+</section>
+
+<div id="toast" hidden></div>
+<script src="lib/opentype.min.js"></script>
+<script src="lib/pdf.min.js"></script>
+<script src="lib/pdf-lib.min.js"></script>
+<script src="hand.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
