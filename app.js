@@ -65,6 +65,11 @@ async function loadHandFile(file) {
   if (taught() && !confirm('Replace the handwriting on this device with this file?')) return;
   hand = h; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('Handwriting loaded ✓');
 }
+function clearHand() {
+  if (!taught()) return toast('There are no letters to clear yet.');
+  if (!confirm('Erase ALL the letters you wrote on this device and start again? This cannot be undone. If you might want them back, tap Cancel and use "Save my handwriting file" first.')) return;
+  hand = { v: 1, g: {} }; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('All letters cleared. Write them again on the Teach tab.');
+}
 
 // ---------- Teach screen: pages of 12 letters, one box each, for the chosen version (1-5)
 const PER = 24;
@@ -323,6 +328,7 @@ function wire() {
   $('#menuBtn').onclick = e => { e.stopPropagation(); $('#menuList').hidden = !$('#menuList').hidden; };
   document.addEventListener('click', () => ($('#menuList').hidden = true));
   $('#saveHand').onclick = saveHandFile;
+  $('#clearHand').onclick = clearHand;
   $('#loadHand').onclick = () => $('#loadHandFile').click();
   $('#loadHandFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadHandFile(f); };
   $('#prev').onclick = () => step(-1); $('#next').onclick = () => step(1);
