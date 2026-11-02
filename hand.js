@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 8; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 9; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -90,7 +90,7 @@
       else if (c.type === 'C') { const x0 = px, y0 = py; for (let t = 1; t <= 8; t++) { const s = t / 8, a = 1 - s; P(a * a * a * x0 + 3 * a * a * s * c.x1 + 3 * a * s * s * c.x2 + s * s * s * c.x, a * a * a * y0 + 3 * a * a * s * c.y1 + 3 * a * s * s * c.y2 + s * s * s * c.y); } }
     }
     const p = polys.filter(q => q.length >= 6);
-    return p.length ? { p } : null;
+    return p.length ? { p, adv: g.advanceWidth * K } : null;
   }
 
   // Pencil shake: two light [1,2,1] passes per stroke, ends kept (points are >=0.012 apart, loops shrink ~2%).
@@ -181,27 +181,165 @@
     const kk = Math.min(Math.max(k, lo), hi);
     const topAlign = LOWER.has(ch) || (!mark && fr.y1 > BASE + 0.15); // hang below-line letters from the top
     const ty = topAlign ? f.y0 + HW - u.y0 * kk : f.y1 - HW - u.y1 * kk, tx = mark ? f.x1 - HW - u.x1 * kk : GX + HW - u.x0 * kk;
-    const out = { s: w.s.map(a => a.map((q, i) => +(i % 2 ? q * kk + ty : q * kk + tx).toFixed(4))) };
-    // fit < 1: still too small after the guard, > 1: too big; lean: slant still missing
-    NORM.set(v, { key, v: out, fit: kk / k, lean: want !== null && s !== null ? Math.abs(want - s) : 0 }); return out;
+    let st = w.s.map(a => a.map((q, i) => i % 2 ? q * kk + ty : q * kk + tx));
+    // Then by eye: lay it over the typed letter where the lines match best, pull its shape part way to the typed one,
+    // and smooth at page size, so a letter drawn tiny and blown up gets the same pen as one drawn big.
+    const L = typedLook(ref, P.sl || 0), F = fitInk(st, L, !plain && ch !== AM); // plain letters and ำ (stands on the line) keep their exact height and line
+    if (F) st = F;
+    st = st.map(a => resample(a, 0.016)); if (F) st = pull(st, L); st = smooth(st);
+    const out = { s: st.map(a => a.map(q => +q.toFixed(4))) };
+    NORM.set(v, { key, v: out }); return out;
+  }
+
+  // ---- Seeing letters: a coarse picture (0.02 cells) of the ink, to lay a drawn letter over the typed one ----
+  const GR = 0.02, CAP = 0.3, PULL = 0.3, LIKE = 0.05; // LIKE: ink distance (as seen) above which a drawing isn't this letter's typed shape (fakes ≤0.03, a scribble 0.08)
+  const grid = (b, m) => { const x0 = b.x0 - m, y0 = b.y0 - m; return { x0, y0, nx: Math.ceil((b.x1 - b.x0 + 2 * m) / GR) + 1, ny: Math.ceil((b.y1 - b.y0 + 2 * m) / GR) + 1 }; };
+  function fillMask(polys, g) { // nonzero fill, like the canvas
+    const m = new Uint8Array(g.nx * g.ny);
+    for (let r = 0; r < g.ny; r++) {
+      const y = g.y0 + (r + 0.5) * GR, xs = [];
+      for (const a of polys) for (let i = 0, n = a.length; i < n; i += 2) {
+        const x1 = a[i], y1 = a[i + 1], x2 = a[(i + 2) % n], y2 = a[(i + 3) % n];
+        if ((y1 <= y) !== (y2 <= y)) xs.push([x1 + (y - y1) / (y2 - y1) * (x2 - x1), y2 > y1 ? 1 : -1]);
+      }
+      xs.sort((p, q) => p[0] - q[0]);
+      for (let k = 0, wn = 0; k < xs.length - 1; k++) {
+        wn += xs[k][1]; if (!wn) continue;
+        for (let c = Math.max(0, Math.ceil((xs[k][0] - g.x0) / GR - 0.5)); c < g.nx && g.x0 + (c + 0.5) * GR < xs[k + 1][0]; c++) m[r * g.nx + c] = 1;
+      }
+    }
+    return m;
+  }
+  function thin(m, g) { // Zhang-Suen: filled letter -> its centre line
+    const W = g.nx, H = g.ny, at = (x, y) => (x >= 0 && y >= 0 && x < W && y < H ? m[y * W + x] : 0);
+    for (let changed = true; changed;) {
+      changed = false;
+      for (let step = 0; step < 2; step++) {
+        const del = [];
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          if (!m[y * W + x]) continue;
+          const p = [at(x, y - 1), at(x + 1, y - 1), at(x + 1, y), at(x + 1, y + 1), at(x, y + 1), at(x - 1, y + 1), at(x - 1, y), at(x - 1, y - 1)];
+          const B = p[0] + p[1] + p[2] + p[3] + p[4] + p[5] + p[6] + p[7]; if (B < 2 || B > 6) continue;
+          let A = 0; for (let i = 0; i < 8; i++) if (!p[i] && p[(i + 1) % 8]) A++;
+          if (A !== 1 || (step ? p[0] * p[2] * p[6] || p[0] * p[4] * p[6] : p[0] * p[2] * p[4] || p[2] * p[4] * p[6])) continue;
+          del.push(y * W + x);
+        }
+        for (const i of del) m[i] = 0; if (del.length) changed = true;
+      }
+    }
+    return m;
+  }
+  function dist(m, g) { // distance to the nearest inked cell, box units (two-pass chamfer)
+    const W = g.nx, H = g.ny, d = new Float32Array(W * H), S = Math.SQRT2;
+    for (let i = 0; i < d.length; i++) d[i] = m[i] ? 0 : 1e9;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const i = y * W + x; let v = d[i];
+      if (x) v = Math.min(v, d[i - 1] + 1);
+      if (y) { v = Math.min(v, d[i - W] + 1); if (x) v = Math.min(v, d[i - W - 1] + S); if (x < W - 1) v = Math.min(v, d[i - W + 1] + S); }
+      d[i] = v;
+    }
+    for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) {
+      const i = y * W + x; let v = d[i];
+      if (x < W - 1) v = Math.min(v, d[i + 1] + 1);
+      if (y < H - 1) { v = Math.min(v, d[i + W] + 1); if (x < W - 1) v = Math.min(v, d[i + W + 1] + S); if (x) v = Math.min(v, d[i + W - 1] + S); }
+      d[i] = v;
+    }
+    for (let i = 0; i < d.length; i++) d[i] *= GR;
+    return d;
+  }
+  function look(d, g, x, y) { // smooth read of a distance map, CAP outside it
+    const fx = (x - g.x0) / GR - 0.5, fy = (y - g.y0) / GR - 0.5, c = Math.floor(fx), r = Math.floor(fy);
+    if (c < 0 || r < 0 || c >= g.nx - 1 || r >= g.ny - 1) return CAP;
+    const a = fx - c, b = fy - r, i = r * g.nx + c;
+    return Math.min(CAP, (d[i] * (1 - a) + d[i + 1] * a) * (1 - b) + (d[i + g.nx] * (1 - a) + d[i + g.nx + 1] * a) * b);
+  }
+  // The typed letter's centre line, leaned like this person writes (cached per font letter and lean).
+  const LOOK = new WeakMap();
+  function typedLook(ref, sl) {
+    let c = LOOK.get(ref); if (!c) LOOK.set(ref, c = {}); if (c[sl]) return c[sl];
+    const b = bbox(ref), my = (b.y0 + b.y1) / 2, polys = sl ? ref.p.map(a => a.map((q, i) => (i % 2 ? q : q + sl * (a[i + 1] - my)))) : ref.p;
+    const g = grid(bbox({ p: polys }), 0.5), fill = fillMask(polys, g), df = dist(fill, g), sk = thin(fill.slice(), g), pts = [], fp = [];
+    const at = i => [g.x0 + ((i % g.nx) + 0.5) * GR, g.y0 + (((i / g.nx) | 0) + 0.5) * GR];
+    for (let i = 0; i < sk.length; i++) { if (sk[i]) pts.push(...at(i)); if (fill[i]) fp.push(...at(i)); }
+    return (c[sl] = { g, df, fp, pts, sk }); // df: distance to the typed ink, fp: typed ink cells, pts: its centre line
+  }
+  // Centre-line cells -> pen strokes (to make test people who write single lines, like real ones).
+  function trace(L) {
+    const { g, sk } = L, W = g.nx, used = new Uint8Array(sk.length), out = [];
+    const nb = i => { const x = i % W, y = (i / W) | 0, o = []; for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) { const X = x + dx, Y = y + dy; if (X >= 0 && Y >= 0 && X < W && Y < g.ny && sk[Y * W + X]) o.push(Y * W + X); } return o; }; // straight neighbours first
+    const P = i => [+(g.x0 + ((i % W) + 0.5) * GR).toFixed(3), +(g.y0 + (((i / W) | 0) + 0.5) * GR).toFixed(3)];
+    const cells = []; for (let i = 0; i < sk.length; i++) if (sk[i]) cells.push(i);
+    for (const ends of [true, false]) for (const c0 of cells) { // start at line ends, then whatever is left (loops)
+      if (used[c0] || (ends && nb(c0).length !== 1)) continue;
+      const join = nb(c0).find(q => used[q]), a = join !== undefined ? [...P(join)] : [];
+      for (let c = c0; c !== undefined; c = nb(c).find(q => !used[q])) { used[c] = 1; a.push(...P(c)); }
+      if (a.length >= 6 || cells.length < 6) out.push(a);
+    }
+    return out;
+  }
+  const tmean = e => { e.sort(); const n = Math.max(1, Math.round(e.length * 0.85)); let t = 0; for (let i = 0; i < n; i++) t += e[i]; return t / n; }; // worst 15% ignored: stray ticks, a longer tail
+  // Size (s), width (a) and place (tx, ty) that lay the drawn ink over the typed ink best, as the eye sees both, both ways.
+  // null when the drawing doesn't look like the typed letter (another style, a scribble): then it is left as drawn.
+  function fitInk(st, L, free) { // free: size and height may change too (tails, marks), else only width and sideways
+    const b = bbox({ s: st }), gd = grid(b, 0.4), m = new Uint8Array(gd.nx * gd.ny), P = [];
+    ink({ s: st }, (x, y) => { m[Math.floor((y - gd.y0) / GR) * gd.nx + Math.floor((x - gd.x0) / GR)] = 1; P.push(x, y); }, GR / 2);
+    const dd = dist(m, gd), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, Q = L.fp;
+    const sp = Math.max(1, Math.round(P.length / 400)) * 2, sq = Math.max(1, Math.round(Q.length / 400)) * 2; // ≤200 points each way
+    const e1 = new Float32Array(Math.ceil(P.length / sp)), e2 = new Float32Array(Math.ceil(Q.length / sq));
+    const err = (s, a, tx, ty) => {
+      // as seen: the drawn line is HW thicker each side, the typed letter is filled
+      for (let i = 0, j = 0; i < P.length; i += sp, j++) e1[j] = Math.max(look(L.df, L.g, cx + tx + s * a * (P[i] - cx), cy + ty + s * (P[i + 1] - cy)) - HW, 0);
+      for (let i = 0, j = 0; i < Q.length; i += sq, j++) e2[j] = Math.max(s * look(dd, gd, cx + (Q[i] - cx - tx) / (s * a), cy + (Q[i + 1] - cy - ty) / s) - HW, 0);
+      return (tmean(e1) + tmean(e2)) / 2;
+    };
+    const lo = [free ? 0.88 : 1, 0.85, -0.12, free ? -0.12 : 0], hi = [free ? 1.12 : 1, 1.15, 0.12, free ? 0.12 : 0];
+    const cost = x => err(...x) + 0.004 * (Math.abs(Math.log(x[0])) / 0.12 + Math.abs(Math.log(x[1])) / 0.15 + (Math.abs(x[2]) + Math.abs(x[3])) / 0.12);
+    let x = [1, 1, 0, 0], best = cost(x), step = [0.04, 0.05, 0.04, 0.04];
+    for (let h = 0; h < 5; h++, step = step.map(q => q / 2)) for (let moved = true; moved;) {
+      moved = false;
+      for (let j = 0; j < 4; j++) for (const sg of [1, -1]) {
+        const y = x.slice(); y[j] = Math.min(Math.max(y[j] + sg * step[j], lo[j]), hi[j]); if (y[j] === x[j]) continue;
+        const c = cost(y); if (c < best - 1e-6) { best = c; x = y; moved = true; }
+      }
+    }
+    if (err(...x) > LIKE) return null;
+    const [s, a, tx, ty] = x;
+    return st.map(q => q.map((v, i) => (i % 2 ? cy + ty + s * (v - cy) : cx + tx + s * a * (v - cx))));
+  }
+  function resample(a, step) { // points every `step` along the stroke, ends kept
+    if (a.length < 4) return a;
+    const o = [a[0], a[1]]; let left = step;
+    for (let i = 2; i < a.length; i += 2) {
+      let x = a[i - 2], y = a[i - 1]; const L = Math.hypot(a[i] - x, a[i + 1] - y); let d = L;
+      while (d >= left) { const t = left / d; x += (a[i] - x) * t; y += (a[i + 1] - y) * t; o.push(x, y); d -= left; left = step; }
+      left -= d;
+    }
+    if (o[o.length - 2] !== a[a.length - 2] || o[o.length - 1] !== a[a.length - 1]) o.push(a[a.length - 2], a[a.length - 1]);
+    return o;
+  }
+  // Move each point PULL of the way to the typed centre line; parts far from it (a flourish, a longer tail) fade out
+  // of the pull. The move is averaged along the stroke so it bends smoothly instead of snapping between branches.
+  function pull(st, L) {
+    const Q = L.pts;
+    return st.map(a => {
+      const n = a.length / 2, mx = new Float64Array(n), my = new Float64Array(n);
+      for (let k = 0; k < n; k++) {
+        const x = a[2 * k], y = a[2 * k + 1]; let bd = Infinity, bx = x, by = y;
+        for (let i = 0; i < Q.length; i += 2) { const d = (Q[i] - x) ** 2 + (Q[i + 1] - y) ** 2; if (d < bd) { bd = d; bx = Q[i]; by = Q[i + 1]; } }
+        const w = PULL * Math.min(Math.max((0.3 - Math.sqrt(bd)) / 0.15, 0), 1); mx[k] = w * (bx - x); my[k] = w * (by - y);
+      }
+      return a.map((q, i) => {
+        const k = i >> 1, k0 = Math.max(0, k - 5), k1 = Math.min(n - 1, k + 5); let t = 0;
+        for (let j = k0; j <= k1; j++) t += i % 2 ? my[j] : mx[j];
+        return q + t / (k1 - k0 + 1);
+      });
+    });
   }
 
   function variantsFor(hand, ch, fb, P) {
     const drawn = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length).map(v => normalize(v, ch, fb, P));
     if (drawn.length) return drawn;
     const f = synth(ch) || (fb && fb(ch)); return f ? [f] : [];
-  }
-
-  // Teach check: is this drawing still off from the typed letter after the fix? {ok, why: small|big|lean}
-  function checkLetter(hand, ch, i, fb) {
-    const v = hand && hand.g && (hand.g[ch] || [])[i], ref = fb && fb(ch);
-    if (!v || !v.s || !v.s.length || !ref || !ref.p) return { ok: true };
-    const P = person(hand, fb); normalize(v, ch, fb, P); const m = NORM.get(v);
-    if (m.fit < 0.9) return { ok: false, why: 'small' };
-    if (m.fit > 1.1) return { ok: false, why: 'big' };
-    if (m.lean > 0.1) return { ok: false, why: 'lean' };
-    // no shape check: pixel overlap can't tell a messy ก from ค vs ด (tried 2026-11-02, see laimue notes)
-    return { ok: true };
   }
 
   // Text -> clusters {base, marks[], am} | {sp}. ำ joins the cluster before it.
@@ -238,12 +376,12 @@
     // (left of a tall tail: the whole body, so a mark over ป's open top still sits on the stem tops like typed text)
     const under = (v, dx) => !b ? XH : tl < Infinity ? inkTop(b, bb.x0, tl - 0.1) : inkTop(b, vb(v).x0 + dx - 0.25, vb(v).x1 + dx + 0.25);
     let top = Infinity, x1 = bb.x1;
-    const add = (v, dx, dy) => { parts.push({ v, dx, dy }); const q = vb(v); return { y0: q.y0 + dy, x1: q.x1 + dx }; };
+    const add = (v, dx, dy, m = true) => { parts.push({ v, dx, dy, m }); const q = vb(v); return { y0: q.y0 + dy, x1: q.x1 + dx }; }; // m: a mark, which never pushes letters apart
     for (const m of cl.marks) if (UPPER.has(m)) {
       const v = pick(m); if (!v) continue;
       const dx = mxOf(v); top = Math.min(top, add(v, dx, under(v, dx) - 0.1 - vb(v).y1).y0);
     }
-    if (cl.am) { const v = pick(AM); if (v) { const q = add(v, mx0, 0); top = Math.min(top, q.y0); x1 = Math.max(x1, q.x1); } }
+    if (cl.am) { const v = pick(AM); if (v) { const q = add(v, mx0, 0, false); top = Math.min(top, q.y0); x1 = Math.max(x1, q.x1); } }
     for (const m of cl.marks) if (LOWER.has(m)) { const v = pick(m); if (v) add(v, bb.x1 - GHOST.r, bb.y1 > BASE + 0.15 ? bb.y1 - BASE - 0.05 : 0); }
     for (const m of cl.marks) if (TOP.has(m)) {
       const v = pick(m); if (!v) continue;
@@ -274,7 +412,8 @@
       const px = it.sc * ((x - it.x0) * it.sw - (y - BASE) * it.sh), j0 = Math.floor(y / BH);
       for (let j = Math.max(0, j0 - 1); j <= Math.min(NB - 1, j0 + 1); j++) { if (px - e < L[j]) L[j] = px - e; if (px + e > Rt[j]) Rt[j] = px + e; }
     };
-    for (const p of it.parts) { e = pen(p.v) * it.sc; ink(p.v, (x, y) => put(x + p.dx, y + p.dy), 0.1); }
+    for (const p of it.parts) if (!p.m) { e = pen(p.v) * it.sc; ink(p.v, (x, y) => put(x + p.dx, y + p.dy), 0.1); } // like typed text, marks never set the spacing
+    // shortcut: a tone mark may touch a neighbouring tall tail (ป ฝ ฟ), as in typed text; upgrade only if it shows up
     return { L, R: Rt };
   }
   // How far the next cluster's start must sit from the previous one's so the visible gap is right: closest approach in any shared band.
@@ -282,6 +421,17 @@
     let d = -Infinity;
     for (let j = 0; j < NB; j++) if (a.pr.R[j] > -Infinity && b.pr.L[j] < Infinity) d = Math.max(d, a.pr.R[j] - b.pr.L[j]);
     return d;
+  }
+
+  // Visible gap between two clusters when typed in the font (end of the 1st letter's ink to start of the 2nd's).
+  const SPACE = 0.462, TG = new Map(); // SPACE: Sriracha's space width in box units; a word's last letter keeps gap 0.1 (about two side bearings)
+  function typedGap(ca, cb, fb) {
+    const key = JSON.stringify([ca, cb]); if (TG.has(key)) return TG.get(key);
+    let g = 0.1;
+    const ok = cl => cl.base && fb && fb(cl.base), adv = cl => fb(cl.base).adv + (cl.am && fb(AM) ? fb(AM).adv : 0);
+    const T = cl => { const it = { ...buildCluster(cl, fb), sc: 1, sw: 1, sh: 0 }; it.pr = profile(it); return it; };
+    if (ok(ca) && ok(cb)) { const A = T(ca), B = T(cb), d = kern(A, B); if (d > -Infinity) g = Math.min(Math.max(B.x0 + adv(ca) - A.x0 - d, 0.03), 0.3); }
+    TG.set(key, g); return g;
   }
 
   // o: {x, y, width, u (page units per box unit), gap (line height in box units), seed, fb, thick, neat (0 natural .. 1 neat, default 1)}
@@ -328,15 +478,15 @@
       const sh = J(0.06); // each word leans its own way a little
       let prev = null;
       const items = parse(seg).map(cl => {
-        if (cl.sp) { prev = null; return { sp: true, w: 0.45 + J(0.06) }; }
+        if (cl.sp) { prev = null; return { sp: true, w: SPACE + J(0.06) }; }
         const b = buildCluster(cl, pick), sc = 1 + J(0.04), sw = 1 + J(0.05);
         const w = b.parts.length ? sc * sw * (b.x1 - b.x0) : 0.5;
-        const it = { ...b, sc, sw, sh, w, gap: 0.13 + J(0.03), th: J(0.035), jy: J(0.02), warps: b.parts.map(warp), dk: 0 };
+        const it = { ...b, sc, sw, sh, w, gap: 0.1 + J(0.03), th: J(0.035), jy: J(0.02), warps: b.parts.map(warp), dk: 0 };
         if (b.parts.length) {
           it.pr = profile(it);
           const d = prev ? kern(prev, it) : -Infinity; // space by the visible gap, not the boxes
-          if (d > -Infinity) it.dk = Math.min(Math.max(d - prev.w, -0.35), 0.3);
-          prev = it;
+          if (d > -Infinity) { it.dk = Math.min(Math.max(d - prev.w, -0.35), 0.3); prev.gap = typedGap(prev.cl, cl, o.fb) + J(0.03); }
+          prev = it; it.cl = cl;
         }
         return it;
       });
@@ -351,20 +501,23 @@
     return { strokes, fills, lines: line + 1, height: (FIRST + line * L + 0.85) * U, lw: U * 0.075 * (o.thick || 1) };
   }
 
-  // Test helper: a fake person drawn from the font outlines (as pen lines). messy: each letter at its own
+  // Test helper: a fake person who writes the font's centre lines with a pen. messy: each letter at its own
   // size, height and slant with a shaky pen; marks drawn big, small, high or low over the grey ก.
   function fakeHand(fb, seed, messy, lean = -0.12) { // lean: this fake person's usual slant (italic < 0)
     const R = rng(seed), J = a => messy ? (R() - 0.5) * 2 * a : 0, g = {};
     for (const [, chars] of GROUPS.slice(0, 3)) for (const ch of chars) {
       const f = fb(ch); if (!f || !f.p) continue;
-      const b = bbox(f), mk = needsGhost(ch);
+      const b = bbox(f), mk = needsGhost(ch), tr = trace(typedLook(f, 0)), c = bbox({ s: tr });
+      // people draw what they see: a thick small mark's centre line is too short, so stretch it until line + pen covers the typed mark
+      const zx = !mk ? 1 : Math.max((b.x1 - b.x0 - 2 * HW) / Math.max(c.x1 - c.x0, 0.01), 1), zy = !mk ? 1 : Math.max((b.y1 - b.y0 - 2 * HW) / Math.max(c.y1 - c.y0, 0.01), 1);
+      const lines = tr.map(a => a.map((q, i) => (i % 2 ? (b.y0 + b.y1) / 2 + (q - (c.y0 + c.y1) / 2) * zy : (b.x0 + b.x1) / 2 + (q - (c.x0 + c.x1) / 2) * zx)));
       g[ch] = [0, 1, 2].slice(0, messy ? 3 : 1).map(() => {
         const k = messy ? (mk ? 0.65 + R() * 0.95 : 0.7 + R() * 0.6) : 1, dy = J(mk ? 0.4 : 0.3), sl = messy ? lean + J(0.15) : 0;
-        return { s: f.p.map(a => {
+        return { s: lines.map(a => {
           const o = [];
-          for (let i = 0; i <= a.length; i += 2) {
-            const ry = (a[(i + 1) % a.length] - b.y1) * k;
-            o.push(b.x0 + (a[i % a.length] - b.x0) * k + sl * ry + J(0.012), b.y1 + ry + dy + J(0.012));
+          for (let i = 0; i < a.length; i += 2) {
+            const ry = (a[i + 1] - b.y1) * k;
+            o.push(+(b.x0 + (a[i] - b.x0) * k + sl * ry + J(0.012)).toFixed(4), +(b.y1 + ry + dy + J(0.012)).toFixed(4));
           }
           return o;
         }) };
@@ -467,7 +620,6 @@
       for (let n = 0; n < 3; n++) for (const cl of parse('สวัสดีครับ ปู่น้ำกั๊ก ญี่ปุ่น ฎีกา')) {
         if (cl.sp) continue;
         const ids = [cl.base, ...cl.marks.filter(m => UPPER.has(m)), ...(cl.am ? [AM] : []), ...cl.marks.filter(m => LOWER.has(m)), ...cl.marks.filter(m => TOP.has(m))].filter(Boolean);
-        if (ids.some(ch => !checkLetter(h, ch, n, fb).ok)) continue; // the Teach page flags these instead
         const A = buildCluster(cl, ch => variantsFor(h, ch, fb, Q)[n]).parts, B = buildCluster(cl, pick).parts; nCl++;
         A.forEach((p, i) => {
           const a = at(p), b = at(B[i]), ch = ids[i], fr = bbox(B[i].v);
@@ -487,14 +639,31 @@
     const kg = { s: fb('ก').p.map(a => a.concat(a.slice(0, 2))) }, hook = { s: kg.s.concat([[0.95, 0.9, 0.97, 0.82]]) }; // ก + a stray tick above
     const hv = see(variantsFor({ g: { 'ก': [hook] } }, 'ก', fb, { k: 0, sl: null })[0]), fv = see(fb('ก')), hr2 = (hv.y1 - hv.y0) / (fv.y1 - fv.y0);
     t('a stray tick does not shrink the letter; pen width counted', Math.abs(hr2 - 1) < 0.03, 'height ' + hr2.toFixed(3) + ' of typed');
-    const nh = fakeHand(fb, 5, false), sc = (v, k, sh = 0) => ({ s: v.s.map(a => a.map((q, i) => i % 2 ? q * k : q * k + sh * (a[i + 1] - 1.5))) });
-    const flag = (ch, v) => checkLetter({ g: { ...nh.g, [ch]: [v] } }, ch, 0, fb).why || 'ok';
-    const neatBad = Object.keys(nh.g).filter(ch => !checkLetter(nh, ch, 0, fb).ok);
-    const fl = [flag('ั', sc(nh.g['ั'][0], 0.3)), flag('่', sc(nh.g['่'][0], 3)), flag('ป', sc(nh.g['ป'][0], 1, -0.5))];
-    t('Teach check: neat letters pass; tiny, giant and very slanted get flagged', !neatBad.length && fl.join() === 'small,big,lean', 'neat flagged: ' + neatBad.join('') + '; got ' + fl.join());
+    // v9: laid over the typed letter by eye, shape pulled part way, same pen at any drawn size, typed spacing.
+    const seen = (st, Lk) => { const e = []; ink({ s: st }, (x, y) => e.push(Math.max(look(Lk.df, Lk.g, x, y) - HW, 0)), 0.02); return tmean(Float32Array.from(e)); };
+    let fFar = '', fSum = 0, fN = 0;
+    for (const ch of GROUPS[0][1]) mh.g[ch].forEach((v, i) => { // a messy letter ends up lying on the typed one, as seen
+      const d = seen(variantsFor(mh, ch, fb, MP)[i].s, typedLook(fb(ch), MP.sl || 0)); fSum += d; fN++;
+      if (d > 0.03) fFar += ch + ' ' + d.toFixed(3) + '; ';
+    });
+    t('messy letters lie on the typed letter', !fFar, 'ink off the typed letter ' + (fSum / fN).toFixed(3) + ' on average' + (fFar ? '; far: ' + fFar.slice(0, 200) : ''));
+    // pull: a ก drawn 15% too big around its middle ends up ~30% nearer the typed centre line
+    const Lg = typedLook(fb('ก'), 0), dsk = dist(Lg.sk, Lg.g), gb = bbox({ s: trace(Lg) }), mx = (gb.x0 + gb.x1) / 2, my = (gb.y0 + gb.y1) / 2;
+    const cl = st => { const e = []; ink({ s: st }, (x, y) => e.push(look(dsk, Lg.g, x, y)), 0.02); return e.reduce((q, x) => q + x, 0) / e.length; };
+    const big = trace(Lg).map(a => resample(a.map((q, i) => (i % 2 ? my + (q - my) * 1.15 : mx + (q - mx) * 1.15)), 0.016)), dOff = cl(big), dPull = cl(pull(big, Lg));
+    t('shape pulled about 30% toward typed', dPull / dOff > 0.6 && dPull / dOff < 0.8, (dPull / dOff).toFixed(2) + ' of the distance left');
+    // same pen: one shaky ก drawn at half size and at double size come out equally smooth
+    const kg0 = fb('ก').p[0], shk = k => ({ s: [kg0.map((q, i) => (i % 2 ? 1.5 + (q - 1.5) * k : 0.25 + (q - 0.25) * k) + 0.012 * k * Math.sin(i * 1.7))] });
+    const turn = st => { let q = 0, len = 0; for (const a of st) for (let i = 2; i < a.length - 2; i += 2) { q += Math.abs(Math.atan2(a[i + 3] - a[i + 1], a[i + 2] - a[i]) - Math.atan2(a[i + 1] - a[i - 1], a[i] - a[i - 2])) % Math.PI; len += Math.hypot(a[i] - a[i - 2], a[i + 1] - a[i - 1]); } return q / len; };
+    const tS = turn(variantsFor({ g: { 'ก': [shk(0.5)] } }, 'ก', fb, { k: 0, sl: null })[0].s), tB = turn(variantsFor({ g: { 'ก': [shk(2)] } }, 'ก', fb, { k: 0, sl: null })[0].s);
+    t('same pen whether drawn small or big', Math.abs(tS / tB - 1) < 0.25, 'shake ' + tS.toFixed(1) + ' vs ' + tB.toFixed(1));
+    // spacing: an upper mark never pushes the next letter away; spaces are typed width
+    const gapAfter = txt => { const lay = layout(txt, null, { x: 0, y: 0, width: 1e4, u: 1, seed: 4, fb, neat: 1 }), f = lay.fills, bs = f.map(a => bbox({ p: [a] })); return bs[bs.length - 1].x0 - Math.max(...bs.slice(0, -1).filter(b => b.y1 > XH + 0.2).map(b => b.x1)); };
+    const gm = gapAfter('รับ'), gn = gapAfter('รบ');
+    t('mark does not push the next letter', Math.abs(gm - gn) < 0.03, 'ร→บ with mark ' + gm.toFixed(2) + ', without ' + gn.toFixed(2));
     return r;
   }
 
-  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, checkLetter, selfTest };
+  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.Hand = API;
 })(this);

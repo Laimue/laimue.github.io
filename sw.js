@@ -1,5 +1,5 @@
 // Network first (so updates show up), cache as offline fallback.
-const C = 'laimue-v8'; // bump with VERSION in hand.js
+const C = 'laimue-v9'; // bump with VERSION in hand.js
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'hand.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png',
   'lib/opentype.min.js', 'lib/pdf.min.js', 'lib/pdf.worker.min.js', 'lib/pdf-lib.min.js', 'lib/Sriracha-Regular.ttf'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(C).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' }))))); self.skipWaiting(); });

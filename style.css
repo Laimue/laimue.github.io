@@ -29,8 +29,6 @@ section { padding: 12px 16px; max-width: 1200px; margin: 0 auto; }
 .box { position: relative; }
 .box canvas { display: block; width: 100%; aspect-ratio: 16 / 26; background: #fff; border: 1px solid var(--line); border-radius: 10px; touch-action: none; -webkit-user-select: none; user-select: none; }
 .box .lbl { position: absolute; top: 2px; left: 5px; font-size: 14px; color: #475569; pointer-events: none; }
-.box.bad canvas { border: 2px solid #dc2626; }
-.box.bad .lbl { color: #dc2626; }
 .box .act { display: flex; justify-content: center; gap: 3px; margin-top: 2px; }
 .box .act button { padding: 0 6px; font-size: 11px; line-height: 18px; border-radius: 6px; background: #fff; color: #334155; }
 #preview { background: #fff; border-radius: 10px; padding: 6px 10px; margin: 6px 0; }
