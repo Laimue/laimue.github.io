@@ -6,6 +6,7 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem('lm.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem('lm.' + k, JSON.stringify(v)); } catch { /* per-device convenience only */ } },
 };
+function doneToast(msg) { toast(msg, 2500); const t = $('#toast'), d = document.createElement('span'); d.className = 'lot tick'; t.prepend(d); M.icon(d, 'done'); }
 function toast(msg, ms = 3500) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => (t.hidden = true), ms); }
 addEventListener('error', e => toast('Error: ' + e.message, 8000));
 addEventListener('unhandledrejection', e => toast('Error: ' + (e.reason && e.reason.message || e.reason), 8000));
@@ -182,6 +183,9 @@ const pathD = (arrs, close) => arrs.map(a => {
   for (let i = 2; i < a.length; i += 2) s += 'L' + a[i].toFixed(2) + ' ' + a[i + 1].toFixed(2);
   return close ? s + 'Z' : s;
 }).join('');
+// one path per stroke in writing order (r.strokes is letter by letter, the pens hold the same arrays), so the ink can write itself on screen
+const stkPaths = (r, color) => { const w = new Map(r.pens.flatMap(([lw, s]) => s.map(a => [a, lw])));
+  return r.strokes.map(a => `<path class="stk" d="${pathD([a])}" fill="none" stroke="${color}" stroke-width="${w.get(a).toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join(''); };
 // pen strokes, one path per pen pressure (line width)
 const penPaths = (r, color) => r.pens.map(([w, s]) => `<path d="${pathD(s)}" fill="none" stroke="${color}" stroke-width="${w.toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join('');
 const toPage = (pg, e) => { const r = pg.el.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * pg.w, (e.clientY - r.top) / r.height * pg.h]; };
@@ -270,11 +274,12 @@ function renderInk(pg) {
   let html = '';
   for (const b of pg.boxes) {
     const r = b.r = lay(b); b.h = Math.max(r.height, b.u * 2.6);
-    html += penPaths(r, ink.color);
-    if (r.fills.length) html += `<path d="${pathD(r.fills, true)}" fill="${ink.color}"/>`;
+    html += '<g>' + stkPaths(r, ink.color);
+    html += (r.fills.length ? `<path class="fil" d="${pathD(r.fills, true)}" fill="${ink.color}"/>` : '') + '</g>';
     const s = b.el.style; s.left = 100 * b.x / pg.w + '%'; s.top = 100 * b.y / pg.h + '%'; s.width = 100 * b.w / pg.w + '%'; s.height = 100 * b.h / pg.h + '%';
   }
   pg.svg.innerHTML = html;
+  pg.boxes.forEach((b, i) => (b.g = pg.svg.children[i]));
   if (lsel && lsel.pg === pg) showSel();
 }
 function removeBox(s) { s.pg.boxes = s.pg.boxes.filter(b => b !== s.box); s.box.el.remove(); renderInk(s.pg); }
@@ -403,7 +408,7 @@ async function buildPdf() {
 async function exportPdf() {
   if (!sheet) return; select(null);
   const btn = $('#exportBtn'); btn.disabled = true;
-  try { await saveFile(new Blob([await buildPdf()], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf'); }
+  try { await saveFile(new Blob([await buildPdf()], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf'); doneToast('PDF saved'); }
   catch (e) { console.error(e); toast('Could not make the PDF: ' + e.message, 6000); }
   btn.disabled = false;
 }
@@ -413,7 +418,7 @@ function showTab(t) {
   LS.set('tab', t);
   for (const s of ['teach', 'sheet']) $('#' + s).hidden = s !== t;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
-  if (t === 'teach') requestAnimationFrame(renderTeach); else if (sheet) sheet.pages.forEach(renderInk);
+  if (t === 'teach') requestAnimationFrame(renderTeach); else if (sheet) sheet.pages.forEach(pg => { renderInk(pg); M.writeOn(pg.svg); });
 }
 function wire() {
   document.querySelectorAll('.tab').forEach(b => (b.onclick = () => showTab(b.dataset.tab)));
@@ -421,6 +426,8 @@ function wire() {
   document.addEventListener('click', () => ($('#menuList').hidden = true));
   $('#saveHand').onclick = saveHandFile;
   $('#clearHand').onclick = clearHand;
+  $('#playIntro').onclick = showIntro;
+  M.icon($('#emptyAnim'), 'empty', true);
   $('#loadHand').onclick = () => $('#loadHandFile').click();
   $('#loadHandFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadHandFile(f); };
   $('#prev').onclick = () => step(-1); $('#next').onclick = () => step(1);
@@ -449,7 +456,7 @@ function wire() {
   $('#lg').oninput = () => { if (sel) { sel.box.gap = +$('#lg').value; LS.set('gap', sel.box.gap); renderInk(sel.pg); } };
   $('#nt').oninput = () => { if (sel) { sel.box.neat = +$('#nt').value; LS.set('neat', sel.box.neat); renderInk(sel.pg); } };
   $('#ver').textContent = 'LaiMue version ' + H.VERSION;
-  $('#shuf').onclick = () => { if (sel) { sel.box.seed = (Math.random() * 1e9) | 0; renderInk(sel.pg); } };
+  $('#shuf').onclick = () => { if (sel) { sel.box.seed = (Math.random() * 1e9) | 0; renderInk(sel.pg); M.writeOn(sel.box.g, 1.5); } };
   $('#del').onclick = () => { if (!sel) return; const s = sel; sel = null; $('#panel').hidden = true; removeBox(s); };
   $('#done').onclick = () => select(null);
   const ios = navigator.maxTouchPoints > 1 && /iPad|iPhone|Macintosh/.test(navigator.userAgent);
@@ -490,4 +497,12 @@ async function runTests() { // open with ?test
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (/[?&]test\b/.test(location.search)) return runTests();
   showTab(LS.get('tab', 'teach'));
+  if (!LS.get('intro', false)) showIntro();
 })();
+function showIntro() { // the app name written in the person's own hand (typed font for letters not taught yet)
+  const r = H.layout('ลายมือ', hand, { x: 0, y: 0, width: 1000, u: 60, gap: 2.4, seed: 7, fb, thick: 1, neat: 1 });
+  const all = [...r.pens.flatMap(([, s]) => s), ...r.fills]; let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const a of all) for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); }
+  const m = 12, svg = all.length ? `<svg viewBox="${x0 - m} ${y0 - m} ${x1 - x0 + 2 * m} ${y1 - y0 + 2 * m}">${stkPaths(r, 'currentColor')}${r.fills.length ? `<path class="fil" d="${pathD(r.fills, true)}" fill="currentColor"/>` : ''}</svg>` : 'ลายมือ';
+  M.intro(svg, () => LS.set('intro', true));
+}

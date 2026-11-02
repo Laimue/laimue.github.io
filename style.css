@@ -148,3 +148,40 @@ input[type=range] { width: 120px; accent-color: var(--primary); height: 32px; }
   .well { padding: 12px; margin-left: -16px; margin-right: -16px; border-radius: 0; }
   .tools { gap: 8px; } .pen, .div { display: none; }
 }
+
+/* ---------- motion: small UI touches (CSS only). Big moves live in motion.js (GSAP) and anim/ (Lottie). */
+:root { --ease-out: cubic-bezier(.2,.8,.2,1); --ease-spring: cubic-bezier(.3,1.4,.5,1); }
+.btn, .icon, .seg button, .tab, .box .act button, #menuList button, #lassoMenu button, .ink { transition: transform .14s var(--ease-out), background-color .2s, color .2s, box-shadow .2s, opacity .2s, border-color .2s; }
+.btn:active:not(:disabled), .icon:active, .seg button:active, .box .act button:active, #lassoMenu button:active, .ink:active { transform: scale(.94); }
+@keyframes m-pop { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+@keyframes m-rise { from { opacity: 0; transform: translateY(10px); } }
+@keyframes m-fade { from { opacity: 0; } }
+@keyframes m-toast { from { opacity: 0; transform: translate(-50%, 16px) scale(.96); } }
+@keyframes m-lasso { from { opacity: 0; transform: translate(-50%, calc(-100% - 4px)) scale(.96); } }
+#menuList { transform-origin: top right; animation: m-pop .2s var(--ease-out); }
+#panel { animation: m-rise .28s var(--ease-out); }
+#lassoMenu { animation: m-lasso .2s var(--ease-out); }
+#toast { animation: m-toast .32s var(--ease-spring); display: flex; align-items: center; gap: 10px; }
+#installHint { animation: m-rise .4s var(--ease-out); }
+section:not([hidden]) { animation: m-fade .25s ease-out; }
+.tbox.on { animation: m-fade .2s; }
+.lot svg path { stroke: currentColor; }
+#emptyAnim { width: 160px; height: 96px; color: var(--accent); }
+.lot.tick { width: 22px; height: 22px; flex: none; color: #30d158; }
+
+/* welcome intro */
+#intro { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 16px; background: color-mix(in srgb, var(--ground) 82%, transparent); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.in-card { position: relative; width: min(520px, 100%); background: var(--surface); border-radius: 24px; padding: 36px 32px 28px; box-shadow: var(--menu-shadow); text-align: center; } /* taste-skill-ignore: modal float */
+.in-skip { position: absolute; top: 14px; right: 16px; padding: 8px 12px; border-radius: 10px; color: var(--muted); font-size: 14px; }
+.in-title { height: 120px; display: grid; place-items: center; color: var(--text); font-size: 64px; }
+.in-title svg { height: 120px; width: auto; max-width: 100%; overflow: visible; }
+@media (max-width: 640px) { .in-title svg { height: 90px; } }
+.in-tag { margin: 8px 0 24px; color: var(--muted); font-size: 17px; }
+.in-steps { list-style: none; margin: 0 0 28px; padding: 0; display: grid; gap: 10px; text-align: left; }
+.in-step { display: grid; grid-template-columns: 40px 1fr; grid-template-rows: auto auto; column-gap: 12px; align-items: center; padding: 12px 14px; border-radius: 14px; background: var(--raised); }
+.in-step .i { grid-row: span 2; width: 26px; height: 26px; justify-self: center; color: var(--accent); }
+.in-step span { color: var(--muted); font-size: 14px; }
+.in-start { transition: none; width: 100%; height: 48px; justify-content: center; font-size: 16px; }
+@media (max-width: 640px) { .in-card { padding: 28px 20px 20px; } .in-title { height: 90px; } }
+
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }

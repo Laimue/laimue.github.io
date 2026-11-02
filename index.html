@@ -50,6 +50,7 @@
       <button id="saveHand"><svg class="i"><use href="#i-save"/></svg>Save my handwriting file</button>
       <button id="loadHand"><svg class="i"><use href="#i-open"/></svg>Load handwriting file</button>
       <input id="loadHandFile" type="file" accept=".json,application/json" hidden>
+      <button id="playIntro"><svg class="i"><use href="#i-pen"/></svg>Play the welcome intro</button>
       <button id="clearHand" class="danger"><svg class="i"><use href="#i-trash"/></svg>Clear all my letters</button>
       <div id="ver"></div>
     </div>
@@ -107,6 +108,7 @@
   </div>
   <div class="well">
     <div id="empty">
+      <div id="emptyAnim" class="lot" aria-hidden="true"></div>
       <p id="sheetHint">Open a PDF or a photo of your worksheet, then tap where an answer goes.</p>
       <button id="openBtn2" class="btn primary"><svg class="i"><use href="#i-open"/></svg>Open worksheet</button>
     </div>
@@ -121,10 +123,26 @@
   <button data-l="done"><svg class="i"><use href="#i-check"/></svg>Done</button>
 </div>
 <div id="toast" hidden></div>
+<div id="intro" hidden role="dialog" aria-modal="true" aria-label="Welcome to LaiMue">
+  <div class="in-card">
+    <button class="in-skip">Skip</button>
+    <div class="in-title" aria-label="ลายมือ"></div>
+    <p class="in-tag">Your own handwriting, on any worksheet.</p>
+    <ol class="in-steps">
+      <li class="in-step"><svg class="i"><use href="#i-pen"/></svg><b>Teach</b><span>Write each Thai letter once with your Pencil.</span></li>
+      <li class="in-step"><svg class="i"><use href="#i-text"/></svg><b>Type</b><span>Open a worksheet and type your answers.</span></li>
+      <li class="in-step"><svg class="i"><use href="#i-share"/></svg><b>Save</b><span>Save a PDF that looks handwritten.</span></li>
+    </ol>
+    <button class="in-start btn primary">Start writing</button>
+  </div>
+</div>
 <script src="lib/opentype.min.js"></script>
 <script src="lib/pdf.min.js"></script>
 <script src="lib/pdf-lib.min.js"></script>
+<script src="lib/gsap.min.js"></script>
+<script src="lib/lottie_light.min.js"></script>
 <script src="hand.js"></script>
+<script src="motion.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
