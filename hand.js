@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 11; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 12; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -467,19 +467,18 @@
   // corners when writing fast. Never past what still reads as the letter: a copy that strays from the typed letter
   // (as seen) more than the drawing itself is tried at half strength, then left as drawn.
   const DOWN = new Set('ฎฏฐญฤฦ'), SEEN0 = new WeakMap();
-  function vary(v, ch, R, fast, Lk, refs) {
-    const src = v.s || v.p, u = () => R() * 2 - 1, many = src.length > 1;
-    const t = Math.min(Math.max(0.3 + 0.5 * (R() + R() - 1) - 0.1 * fast, 0), 0.8); // pull toward typed: 0 = as drawn, today's look 0.3
-    const ky = 0.32 * u(), kx = 0.32 * u(), kt = 0.16 * u(), kl = 0.15 * u(), sh = src.map(() => [0.022 * u(), 0.022 * u()]);
-    const up = TALL.has(ch), down = DOWN.has(ch), soft = fast > 0.6 ? 2 : fast > 0 ? 1 : 0;
-    const np = src.reduce((q, a) => q + a.length / 2, 0), at = () => { let k = (R() * np) | 0; for (const a of src) { if (k < a.length / 2) return [a[2 * k], a[2 * k + 1]]; k -= a.length / 2; } };
-    // a reference hand that looks like this person's, pulled toward only in 1-2 soft spots (person > typed > references)
+  function vary(v, ch, R, fast, Lk, refs, sty) {
+    const src = v.s || v.p, u = () => R() * 2 - 1, many = src.length > 1, neat = sty ? sty.neat : 1;
+    // a reference hand that looks like this person's is a mold: the letter is stretched 18-42% of the way into it (fresh each copy)
     let rf = null;
     if (v.s && refs) {
-      let x = R() * refs.tot; const st = (refs.out.find(e => (x -= e[0]) <= 0) || refs.out[refs.out.length - 1])[1], spots = [];
-      for (let n = R() < 0.5 ? 1 : 2; n > 0; n--) spots.push([...at(), 0.35 + 0.25 * R(), Math.min(0.1 + 0.2 * R(), Math.max(0.8 - t, 0))]);
-      rf = { st, spots };
+      const [, st, i] = refs.out[refChoose(refs, R, sty)];
+      rf = { d: mold(v, st, i), a: 0.18 + 0.24 * R(), font: !HANDY.has(REFS.j.refs[i].kind) };
     }
+    const t = Math.min(Math.max(0.3 + 0.5 * (R() + R() - 1) - 0.1 * fast - (rf ? 0.5 * rf.a : 0), 0), 0.8); // pull toward typed: 0 = as drawn, today's look 0.3; person, typed and mold share the letter
+    const ky = 0.32 * u(), kx = 0.32 * u(), kt = 0.16 * u(), kl = 0.15 * u(), sh = src.map(() => [0.022 * u(), 0.022 * u()]);
+    const up = TALL.has(ch), down = DOWN.has(ch), soft = (fast > 0.6 ? 2 : fast > 0 ? 1 : 0) + (rf && rf.font && neat >= 0.5 ? 1 : 0); // a neat sheet molded on a font borrows its tidy curves
+    const np = src.reduce((q, a) => q + a.length / 2, 0), at = () => { let k = (R() * np) | 0; for (const a of src) { if (k < a.length / 2) return [a[2 * k], a[2 * k + 1]]; k -= a.length / 2; } };
     // parts of the letter change (each change on in about half the copies): loops and heads, corners, stroke ends, bulges
     const ops = [];
     if (v.s) {
@@ -512,7 +511,7 @@
       }
       if (rf || ops.length) {
         const b1 = bbox({ p: s });
-        s = rf ? refPull(s, rf.st, rf.spots.map(([x, y, r, pk]) => [x, y, r, g * pk])) : s.map(a => a.slice());
+        s = rf ? s.map((a, j) => a.map((q, i) => q + rf.a * rf.d[j][i])) : s.map(a => a.slice()); // the mold stays whole; g tames the rest
         for (const f of ops) f(s, g);
         if (!up && !down) { const m = bbox({ p: s }), z = (b1.y1 - b1.y0) / Math.max(m.y1 - m.y0, 0.01); s = s.map(a => a.map((q, i) => (i % 2 ? b1.y0 + (q - m.y0) * z : q))); } // shape changes, not size: same top and bottom
       }
@@ -536,7 +535,12 @@
     const wrap = s => (v.s ? { s } : { p: s });
     if (!Lk) return wrap(make(1));
     let b0 = SEEN0.get(v); if (b0 === undefined) SEEN0.set(v, b0 = seen(src, Lk));
-    for (const g of [1, 0.7, 0.4]) { const s = make(g); if (seen(s, Lk) <= Math.max(LIKE, b0 + 0.01)) return wrap(s); }
+    let lim = Math.max(LIKE, b0 + 0.01);
+    if (rf) { // a mold is a real hand's letter: measure from the molded letter, unless the mold itself strays too far
+      const bm = seen(src.map((a, j) => a.map((q, i) => q + rf.a * rf.d[j][i])), Lk);
+      if (bm > Math.max(LIKE, b0 + 0.02)) rf = null; else lim = Math.max(lim, bm + 0.01);
+    }
+    for (const g of [1, 0.7, 0.4]) { const s = make(g); if (seen(s, Lk) <= lim) return wrap(s); }
     return v;
   }
 
@@ -587,21 +591,53 @@
   let REFS = null; const KW = { crowd: 3, hand: 3, looped: 2, loopless: 1 }, RW = new WeakMap();
   function setRefs(j) { REFS = j && j.g && j.refs ? { j, w: j.refs.map(r => KW[r.kind] || 1), d: {} } : null; }
   const unDelta = a => { const o = new Array(a.length); for (let i = 0; i < a.length; i++) o[i] = (i > 1 ? o[i - 2] : 0) + a[i] / 100; return o; }; // stored as 0.01 steps from the previous point
-  const refsOf = ch => !REFS ? [] : REFS.d[ch] || (REFS.d[ch] = (REFS.j.g[ch] || []).map(([i, st]) => [REFS.w[i], st.map(unDelta)]));
+  const refsOf = ch => !REFS ? [] : REFS.d[ch] || (REFS.d[ch] = (REFS.j.g[ch] || []).map(([i, st]) => [REFS.w[i], st.map(unDelta), i]));
+  const HANDY = new Set(['crowd', 'hand']); // real or handwriting-font hands; the rest are print-like fonts
+  const refKindMul = (i, neat) => (HANDY.has(REFS.j.refs[i].kind) ? 1.5 - neat : 0.5 + neat); // neat sheets lean on fonts, natural ones on real hands
+  function styleHands(R, neat) { // 3 reference hands this sheet leans on, so the whole page reads as one hand
+    const n = REFS ? REFS.j.refs.length : 0, out = new Set();
+    for (let k = 0; k < 20 && out.size < Math.min(3, n); k++) {
+      const ws = REFS.w.map((w, i) => (out.has(i) ? 0 : w * refKindMul(i, neat))); let x = R() * ws.reduce((a, b) => a + b, 0), i = ws.findIndex(w => (x -= w) <= 0);
+      out.add(i < 0 ? n - 1 : i);
+    }
+    return out;
+  }
   const fitBox = (st, b) => { const r = bbox({ s: st }), zx = (b.x1 - b.x0) / Math.max(r.x1 - r.x0, 0.05), zy = (b.y1 - b.y0) / Math.max(r.y1 - r.y0, 0.05); return st.map(a => a.map((q, i) => (i % 2 ? b.y0 + (q - r.y0) * zy : b.x0 + (q - r.x0) * zx))); };
   const near = (A, B) => { let t = 0; for (let i = 0; i < A.length; i += 2) { let m = Infinity; for (let j = 0; j < B.length; j += 2) m = Math.min(m, (A[i] - B[j]) ** 2 + (A[i + 1] - B[j + 1]) ** 2); t += Math.sqrt(m); } return t / (A.length / 2); };
-  function refPick(v, ch) { // refs that look like this drawn letter: chance ∝ exp(-distance/0.05) × kind weight (null: none)
+  function refPick(v, ch) { // refs that look like this drawn letter: chance ∝ exp(-distance/0.07) × kind weight (null: none)
     if (!REFS || !v || !v.s) return null; if (RW.has(v)) return RW.get(v);
     const b = bbox(v), P = [], out = []; let tot = 0; ink(v, (x, y) => P.push(x, y), 0.04);
-    for (const [w, st] of refsOf(ch)) {
+    for (const [w, st, i] of refsOf(ch)) {
       const Q = []; ink({ s: fitBox(st, b) }, (x, y) => Q.push(x, y), 0.04);
-      const e = w * Math.exp(-(near(P, Q) + near(Q, P)) / 2 / 0.05); if (e > 1e-4) { out.push([e, st]); tot += e; }
+      const e = w * Math.exp(-(near(P, Q) + near(Q, P)) / 2 / 0.07); if (e > 1e-4) { out.push([e, st, i]); tot += e; }
     }
     const c = out.length ? { tot, out } : null; RW.set(v, c); return c;
   }
-  function refPull(s, st, spots) { // pull toward a reference letter (fitted to this copy's box) only inside soft spots [x, y, radius, peak]
-    const pts = []; for (const a of fitBox(st, bbox({ p: s }))) pts.push(...resample(a, 0.016));
-    return pull(s, { pts }, (x, y) => { let w = 0; for (const [cx, cy, r, pk] of spots) w = Math.max(w, pk * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * r * r))); return w; });
+  function refChoose(refs, R, sty) { // which look-alike reference this copy molds into: this sheet's hands ×5, kind by neatness
+    const neat = sty ? sty.neat : 1, ws = refs.out.map(([e, , i]) => e * refKindMul(i, neat) * (sty && sty.hands.has(i) ? 5 : 1));
+    let x = R() * ws.reduce((a, b) => a + b, 0), j = ws.findIndex(w => (x -= w) <= 0); return j < 0 ? ws.length - 1 : j;
+  }
+  // Mold: one smooth bend that lays the drawn letter into a reference letter fitted to its box. Per point of v.s, full strength;
+  // a copy takes a fraction of it, so the reference's proportions and curves come through while the person's pen detail rides along.
+  const MOLD = new WeakMap();
+  function mold(v, st, ri) {
+    let c = MOLD.get(v); if (!c) MOLD.set(v, c = {}); if (c[ri]) return c[ri];
+    const P0 = [], Q = []; ink(v, (x, y) => P0.push(x, y), 0.04); ink({ s: fitBox(st, bbox(v)) }, (x, y) => Q.push(x, y), 0.04);
+    const n = P0.length / 2, m = Q.length / 2, P = P0.slice(), dx = new Float64Array(n), dy = new Float64Array(n), cn = new Float64Array(n);
+    const nearest = (X, k, Y, ny) => { let b = 0, bd = Infinity; for (let j = 0; j < ny; j++) { const d = (Y[2 * j] - X[2 * k]) ** 2 + (Y[2 * j + 1] - X[2 * k + 1]) ** 2; if (d < bd) { bd = d; b = j; } } return b; };
+    const field = (x, y, sg, fx, fy) => { let sx = 0, sy = 0, sw = 0; for (let k = 0; k < n; k++) { const w = Math.exp(-((x - P[2 * k]) ** 2 + (y - P[2 * k + 1]) ** 2) / (2 * sg * sg)); sx += w * fx[k]; sy += w * fy[k]; sw += w; } return [sx / sw, sy / sw]; };
+    for (let r = 0; r < 12; r++) {
+      dx.fill(0); dy.fill(0); cn.fill(0);
+      for (let k = 0; k < n; k++) { const j = nearest(P, k, Q, m); dx[k] += Q[2 * j] - P[2 * k]; dy[k] += Q[2 * j + 1] - P[2 * k + 1]; cn[k]++; } // drawn ink goes to the mold
+      for (let j = 0; j < m; j++) { const k = nearest(Q, j, P, n); dx[k] += Q[2 * j] - P[2 * k]; dy[k] += Q[2 * j + 1] - P[2 * k + 1]; cn[k]++; } // every part of the mold gets filled
+      for (let k = 0; k < n; k++) { dx[k] /= cn[k]; dy[k] /= cn[k]; }
+      const sg = 0.2 * Math.pow(0.3, r / 11), mv = []; // broad bends first, then finer: 0.2 -> 0.06
+      for (let k = 0; k < n; k++) mv.push(field(P[2 * k], P[2 * k + 1], sg, dx, dy));
+      for (let k = 0; k < n; k++) { P[2 * k] += 0.7 * mv[k][0]; P[2 * k + 1] += 0.7 * mv[k][1]; }
+    }
+    for (let k = 0; k < n; k++) { dx[k] = P[2 * k] - P0[2 * k]; dy[k] = P[2 * k + 1] - P0[2 * k + 1]; }
+    for (let k = 0; k < 2 * n; k++) P[k] = P0[k]; // the total bend, looked up where the drawn points started
+    return c[ri] = v.s.map(a => { const o = new Array(a.length); for (let i = 0; i < a.length; i += 2) { const [fx, fy] = field(a[i], a[i + 1], 0.08, dx, dy); o[i] = fx; o[i + 1] = fy; } return o; });
   }
 
   // o: {x, y, width, u (page units per box unit), gap (line height in box units), seed, fb, thick, neat (0 natural .. 1 neat, default 1)}
@@ -610,6 +646,7 @@
     const mess = 0.8 - 0.6 * neat; // how far letters stray off the line: neat = 0.2x the old wobble, natural = 0.8x
     const J = a => (R() - 0.5) * 2 * a * mess;
     const vr = 1 - 0.5 * neat, u = () => R() * 2 - 1, V = a => u() * a * vr; // how much copies differ: neat half, natural full
+    const sty = REFS ? { hands: styleHands(rng((o.seed || 1) * 7919 + 3), neat), neat } : null; // this sheet's reference hands
     // The writer drifts instead of jumping: size, speed and lean wander letter to letter (each about ±1, ~5-letter memory).
     // Faster = wider, leaning more, rounder, looser, spaced wider; the hand loosens a little line by line.
     const W = { sz: 0, fast: 0, ln: 0 }, cl2 = x => Math.min(Math.max(x, -2), 2);
@@ -622,7 +659,7 @@
       last[ch] = i; let v = vs[i];
       if (vs.length > 1 && v.s) { const w = vs[(i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length], m = w.s && match(v, w); if (m) v = blend(m, R()); } // somewhere between two of their versions
       const ref = o.fb && o.fb(ch);
-      return vary(v, ch, R, fastNow(), ref && ref.p ? typedLook(ref, P.sl || 0) : null, refPick(vs[i], ch));
+      return vary(v, ch, R, fastNow(), ref && ref.p ? typedLook(ref, P.sl || 0) : null, refPick(vs[i], ch), sty);
     };
     const warp = () => ({ ax: J(0.03), ay: J(0.03), fx: 3 + R() * 4, fy: 3 + R() * 4, px: R() * 6.3, py: R() * 6.3 });
     const maxW = o.width / o.u, L = o.gap || 2.4, U = o.u;
@@ -867,7 +904,7 @@
     // common sense: varied copies of every letter still lie on the typed letter; the half-strength/as-drawn fallback is rare
     let vBad = '', vBack = 0, vN = 0;
     for (const ch of GROUPS[0][1]) mh.g[ch].forEach((v0, i) => {
-      const v = variantsFor(mh, ch, fb, MP)[i], Lk = typedLook(fb(ch), MP.sl || 0), lim = Math.max(LIKE, seen(v.s, Lk) + 0.01);
+      const v = variantsFor(mh, ch, fb, MP)[i], Lk = typedLook(fb(ch), MP.sl || 0), lim = Math.max(LIKE, seen(v.s, Lk) + 0.03); // v12: a mold may move it up to 0.02 more
       for (let sd = 1; sd <= 20; sd++) { const R = rng(sd * 97 + i), q = vary(v, ch, R, R() * 3 - 1.5, Lk, refPick(v, ch)); vN++; if (q === v) vBack++; else if (seen(q.s, Lk) > lim) vBad += ch + ' '; }
     });
     t('every copy still reads as its letter', !vBad && vBack < 0.1 * vN, (100 * vBack / vN).toFixed(1) + '% left as drawn' + (vBad ? '; strays: ' + vBad.slice(0, 100) : '') + (REFS ? ', refs on' : ''));
@@ -887,11 +924,25 @@
     else {
       const chars = GROUPS.filter((_, i) => i !== 5 && i !== 7).map(g => g[1]).join(''), few = [...chars].filter(ch => refsOf(ch).length < 20);
       t('reference hands loaded', REFS.j.refs.length >= 40 && !few.length, REFS.j.refs.length + ' refs' + (few.length ? '; under 20: ' + few.join('') : ''));
-      let dr = 0, dt = 0;
+      // v12: the letter stretches part-way into a look-alike reference (a mold); its own pen wobble survives
+      let cut = 0, keep = 0, nm = 0, full = 0;
       for (const ch of 'กดบมสอ') { const v = variantsFor(mh, ch, fb, MP)[0], rk = refPick(v, ch); if (!rk) continue;
-        for (let sd = 1; sd <= 10; sd++) { const R = rng(sd), st = rk.out[(R() * rk.out.length) | 0][1], spots = [[...v.s[0].slice(0, 2), 0.35 + 0.25 * R(), 0.1 + 0.2 * R()]];
-          const q = refPull(v.s, st, spots); v.s.forEach((a, j) => a.forEach((x, i) => { dr += Math.abs(q[j][i] - x); dt += Math.abs(v.s0[j][i] - x); })); } }
-      t('references pull less than the typed letter', dr > 0 && dr < dt, 'moves ' + (dt ? (dr / dt).toFixed(2) : '?') + ' of the typed pull');
+        const [, st, ri] = rk.out.reduce((a, b) => (b[0] > a[0] ? b : a)), Fi = []; ink({ s: fitBox(st, bbox(v)) }, (x, y) => Fi.push(x, y), 0.02);
+        const dist = s => { const A = []; ink({ s }, (x, y) => A.push(x, y), 0.02); return Math.max(near(A, Fi), 1e-3); }; // how far the drawn ink lies from the mold (mold parts it never drew can't be filled)
+        const d = mold(v, st, ri), q = v.s.map((a, j) => a.map((x, i) => x + 0.3 * d[j][i]));
+        const wob = { s: v.s.map(a => a.map((x, i) => (i % 2 ? x + 0.012 * Math.sin(i * 1.7) : x))) }, dw = mold(wob, st, ri); let e = 0, w0 = 0;
+        wob.s.forEach((a, j) => a.forEach((x, i) => { if (i % 2) { const w = x - v.s[j][i]; e += Math.abs(x + 0.3 * dw[j][i] - q[j][i] - w); w0 += Math.abs(w); } }));
+        cut += 1 - dist(q) / dist(v.s); full = (full || 0) + 1 - dist(v.s.map((a, j) => a.map((x, i) => x + d[j][i]))) / dist(v.s); keep += 1 - e / w0; nm++;
+      }
+      t('letters stretch into a reference mold, pen detail kept', nm > 3 && cut / nm >= 0.2 && keep / nm >= 0.6, '30% mold: ' + (100 * cut / nm).toFixed(0) + '% closer to the reference (full mold ' + (100 * full / nm).toFixed(0) + '%), wobble kept ' + (100 * keep / nm).toFixed(0) + '%');
+      // the sheet leans on its own 3 hands; neat sheets mold on fonts, natural ones on real hands
+      const hs = styleHands(rng(5), 1); let sOn = 0, sOff = 0, f1 = 0, f0 = 0, nd = 0;
+      for (const ch of GROUPS[0][1]) { const rk = refPick(variantsFor(mh, ch, fb, MP)[0], ch); if (!rk) continue;
+        for (let sd = 1; sd <= 30; sd++) { const R = rng(sd * 31), ix = j => rk.out[j][2];
+          sOn += hs.has(ix(refChoose(rk, R, { hands: hs, neat: 1 }))); sOff += hs.has(ix(refChoose(rk, R, { hands: new Set(), neat: 1 })));
+          f1 += !HANDY.has(REFS.j.refs[ix(refChoose(rk, R, { hands: new Set(), neat: 1 }))].kind); f0 += !HANDY.has(REFS.j.refs[ix(refChoose(rk, R, { hands: new Set(), neat: 0 }))].kind); nd++; } }
+      t('one sheet, one hand: its 3 reference hands lead', hs.size === 3 && sOn >= 2.5 * Math.max(sOff, 1), 'sheet hands picked ' + (100 * sOn / nd).toFixed(0) + '% (without the sheet ' + (100 * sOff / nd).toFixed(0) + '%)');
+      t('neat molds on fonts, natural on real hands', f1 > 1.3 * f0, 'font molds: neat ' + (100 * f1 / nd).toFixed(0) + '%, natural ' + (100 * f0 / nd).toFixed(0) + '%');
     }
     // two close versions of a letter mix; two different ones never do
     const ka = mh.g['ก'][0], kb = { s: ka.s.map(a => a.map((q, i) => (i % 2 ? q : q + 0.6 * (q - 0.5) * 0.15))) }, kd = mh.g['ด'][0];
