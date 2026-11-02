@@ -177,10 +177,16 @@ input[type=range] { width: 120px; accent-color: var(--orange); height: 44px; }
 .caret { display: inline-block; width: .5em; height: 1.05em; margin-left: 3px; vertical-align: -0.16em; background: var(--orange); animation: blink 1s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 #sheetHint { margin: 0; color: var(--muted); max-width: 44ch; }
-#panel { position: sticky; top: calc(var(--top) + 72px); z-index: 20; padding: 12px; margin-top: 8px; }
-#txt { width: 100%; font: 18px/1.5 var(--font); border: 0; border-radius: 10px; padding: 10px 12px; background: var(--raised); color: var(--ink); resize: vertical; }
-#txt:focus { outline: 2px solid var(--orange); outline-offset: -1px; }
-#panel .row { margin-top: 8px; gap: 8px 18px; }
+/* box bar floats by the selected box (placed in placeBar()); the typed text is edited right in the box */
+#panel { position: absolute; z-index: 25; display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; padding: 0 4px 0 14px; width: max-content; max-width: 100%; }
+#panel label { font-size: 13px; gap: 6px; }
+#panel input[type=range] { width: 92px; }
+#txt, .typed-out { display: block; width: 100%; margin: 0; padding: 0 2px; border: 0; border-radius: 0; background: none; color: #0d0d0d; font-family: var(--font); resize: none; overflow: hidden;
+  white-space: pre-wrap; overflow-wrap: break-word; caret-color: var(--orange); outline: none; box-shadow: none; -webkit-user-select: text; user-select: text; }
+#txt::placeholder { color: rgba(0,0,0,.32); }
+.typed-out { position: absolute; left: 0; top: 0; pointer-events: none; }
+.tbox.edit { cursor: text; }
+.pscan { position: absolute; left: -6px; right: -6px; top: 0; height: 3px; margin-top: -1px; background: var(--orange); box-shadow: 0 0 18px 4px rgba(255,77,23,.55); pointer-events: none; z-index: 5; }
 #pages { display: flex; flex-direction: column; gap: 40px; align-items: center; padding: 16px 12px 40px; }
 .page { position: relative; width: 100%; background: #fff; border-radius: 2px; touch-action: pan-x pan-y; }
 .page > canvas, .page > svg { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -249,5 +255,5 @@ input[type=range] { width: 120px; accent-color: var(--orange); height: 44px; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
-  .glow, #fx, #scan, .floor { display: none; }
+  .glow, #fx, #scan, .pscan, .floor { display: none; }
 }

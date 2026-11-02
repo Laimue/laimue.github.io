@@ -102,18 +102,6 @@
       <button id="exportBtn" class="btn primary" disabled><svg class="i"><use href="#i-share"/></svg>Save PDF</button>
     </div>
   </div>
-  <div id="panel" class="float" hidden>
-    <textarea id="txt" rows="3" lang="th" placeholder="พิมพ์คำตอบที่นี่…"></textarea>
-    <div class="row">
-      <label>Size <input id="sz" type="range" min="3" max="40" step="0.25"></label>
-      <label>Line gap <input id="lg" type="range" min="1.6" max="4" step="0.05"></label>
-      <label>Natural <input id="nt" type="range" min="0" max="1" step="0.05" aria-label="Neatness: natural to neat"> Neat</label>
-      <span class="grow"></span>
-      <button id="shuf" class="icon" aria-label="Rewrite in a new variation"><svg class="i"><use href="#i-shuffle"/></svg></button>
-      <button id="del" class="icon" aria-label="Delete box"><svg class="i"><use href="#i-trash"/></svg></button>
-      <button id="done" class="btn primary">Done</button>
-    </div>
-  </div>
   <div class="well">
     <div id="empty">
       <div class="floor" aria-hidden="true"></div>
@@ -129,6 +117,14 @@
 </section>
 </main>
 
+<div id="panel" class="float" hidden>
+  <label>Size <input id="sz" type="range" min="3" max="40" step="0.25"></label>
+  <label>Gap <input id="lg" type="range" min="1.6" max="4" step="0.05"></label>
+  <label>Natural <input id="nt" type="range" min="0" max="1" step="0.05" aria-label="Neatness: natural to neat"> Neat</label>
+  <button id="shuf" class="icon" aria-label="Rewrite in a new variation"><svg class="i"><use href="#i-shuffle"/></svg></button>
+  <button id="del" class="icon" aria-label="Delete box"><svg class="i"><use href="#i-trash"/></svg></button>
+</div>
+<textarea id="txt" rows="1" lang="th" enterkeyhint="done" spellcheck="false" placeholder="พิมพ์คำตอบ…" aria-label="Answer text" hidden></textarea>
 <div id="lassoMenu" class="float" hidden>
   <button data-l="shuffle"><svg class="i"><use href="#i-shuffle"/></svg>Rewrite</button>
   <button data-l="reset"><svg class="i"><use href="#i-reset"/></svg>Reset</button>

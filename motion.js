@@ -118,6 +118,34 @@ const M = (() => {
     gsap.fromTo(el, { opacity: 0, filter: 'blur(10px)' }, { opacity: 1, filter: 'blur(0px)', duration: 0.45, ease: 'power2.out', clearProps: 'filter,opacity' });
   }
 
+  // ---------- worksheet opens: pages drop in and sharpen (staggered), then once each page's picture is drawn (ready) an orange line scans
+  // down it and the picture is revealed behind the line; any handwriting writes itself on after. Only pages on screen animate.
+  function pageIn(pages, ready) {
+    const t0 = performance.now(), live = can();
+    pages.forEach((p, i) => {
+      if (!live || i > 3 || p.el.getBoundingClientRect().top > innerHeight) { ready[i].catch(() => { }); return; }
+      const at = i * 0.15, line = document.createElement('div'); line.className = 'pscan'; line.style.opacity = 0; p.el.append(line);
+      gsap.fromTo(p.el, { y: 40, opacity: 0, filter: 'blur(12px)' }, { y: 0, opacity: 1, filter: 'blur(0px)', duration: 0.6, delay: at, ease: 'expo.out', clearProps: 'transform,opacity,filter' });
+      gsap.set(p.bg, { clipPath: 'inset(0% 0% 100% 0%)' }); // blank paper until the scan
+      const end = () => { line.remove(); gsap.set(p.bg, { clearProps: 'clipPath' }); };
+      ready[i].then(() => {
+        gsap.timeline({ delay: Math.max(0, at + 0.45 - (performance.now() - t0) / 1000), onComplete: () => { end(); writeOn(p.svg, 2); } })
+          .fromTo(line, { top: '0%', opacity: 1 }, { top: '100%', duration: 0.9, ease: 'power2.inOut' })
+          .fromTo(p.bg, { clipPath: 'inset(0% 0% 100% 0%)' }, { clipPath: 'inset(0% 0% 0% 0%)', duration: 0.9, ease: 'power2.inOut' }, 0)
+          .to(line, { opacity: 0, duration: 0.15 });
+      }, end);
+    });
+  }
+
+  // ---------- typed text hands over to handwriting: the text blurs out in orange while the box flickers
+  function handover(box, ta) {
+    if (!box || !ta || !can()) return;
+    const g = document.createElement('div'); g.className = 'typed-out'; g.textContent = ta.value; g.style.fontSize = ta.style.fontSize; g.style.lineHeight = ta.style.lineHeight; box.append(g);
+    gsap.fromTo(g, { opacity: 1 }, { opacity: 0, color: '#ff4d17', filter: 'blur(6px)', duration: 0.4, ease: 'power2.out', onComplete: () => g.remove() });
+    gsap.to(box, { keyframes: [{ backgroundColor: 'rgba(255,77,23,.28)', duration: 0.05 }, { backgroundColor: 'rgba(255,77,23,.04)', duration: 0.06 }, { backgroundColor: 'rgba(255,77,23,.2)', duration: 0.05 }, { backgroundColor: 'rgba(255,77,23,0)', duration: 0.3 }],
+      onComplete: () => gsap.set(box, { clearProps: 'backgroundColor' }) });
+  }
+
   // ---------- full-screen orange flash slide with one huge black word. onCover runs while the screen is fully orange. false = not shown.
   function flash(text, done, onCover) {
     if (!can()) { onCover && onCover(); done && done(); return false; }
@@ -160,5 +188,5 @@ const M = (() => {
       .fromTo(q('.in-start, .in-skip'), { y: 8, opacity: 0 }, { ...on, duration: 0.35, stagger: 0.06 }, '-=0.2');
   }
 
-  return { writeOn, icon, spark, words, frame, swap, settle, tab, flash, prompt, intro, can };
+  return { writeOn, icon, spark, words, frame, swap, settle, tab, pageIn, handover, flash, prompt, intro, can };
 })();

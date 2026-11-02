@@ -88,6 +88,16 @@ const padCv = () => $('#pad');
 
 function strokeLine(x, a) { x.beginPath(); x.moveTo(a[0], a[1]); if (a.length === 2) x.lineTo(a[0] + 0.001, a[1]); for (let j = 2; j < a.length; j += 2) x.lineTo(a[j], a[j + 1]); x.stroke(); }
 function fillPolys(x, polys) { x.beginPath(); for (const a of polys) { x.moveTo(a[0], a[1]); for (let j = 2; j < a.length; j += 2) x.lineTo(a[j], a[j + 1]); x.closePath(); } x.fill(); }
+// sideways shift that centres a letter's typed hint (with its ก ghost for marks) in the box; the font puts every glyph at its own left bearing
+const midC = {};
+function midDx(ch) {
+  if (ch in midC) return midC[ch];
+  const g = fb(ch); if (!g) return 0; // font not loaded yet: don't cache
+  const span = ps => { let a = Infinity, b = -Infinity; for (const q of ps) for (let j = 0; j < q.length; j += 2) { a = Math.min(a, q[j]); b = Math.max(b, q[j]); } return [a, b]; };
+  let [a, b] = span([...g.p, ...(H.needsGhost(ch) && fb('ก') ? fb('ก').p : [])]);
+  if (b - a > H.BOX_W * 0.94) [a, b] = span(g.p); // ก + ำ is wider than the box: centre the letter itself, the grey ก may run off the edge
+  return (midC[ch] = H.BOX_W / 2 - (a + b) / 2);
+}
 // one letter box: guide lines, a grey ก under marks, the faint typed letter while empty, then the person's strokes
 function paint(cv, i, o = {}) {
   const c = CHARS[i], w = cv && cv.clientWidth; if (!c || !w) return;
@@ -99,9 +109,11 @@ function paint(cv, i, o = {}) {
     const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / k, 4 / k] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(H.BOX_W, y); x.stroke(); };
     hl(0.3, '#e7e5df', 1); hl(H.XH, '#d3d0c8'); hl(H.BASE, '#a29e94'); hl(2.5, '#e7e5df', 1); x.setLineDash([]);
   }
+  x.save(); x.translate(midDx(c.ch), 0); // hints sit centred; normalize() re-places drawn letters, so this is display only
   if (H.needsGhost(c.ch)) { const g = fb('ก'); if (g) { x.fillStyle = '#dad8d2'; fillPolys(x, g.p); } }
   const v = vOf(i), ty = !v && fb(c.ch); // empty box: faint typed letter as a "write here" guide; the app fixes the rest
   if (ty && ty.p) { x.fillStyle = o.guides ? 'rgba(255,77,23,0.13)' : 'rgba(0,0,0,0.16)'; fillPolys(x, ty.p); }
+  x.restore();
   x.strokeStyle = '#141414'; x.lineWidth = o.guides ? 0.075 : 0.11; x.lineCap = x.lineJoin = 'round';
   for (const a of v ? v.s : []) strokeLine(x, a);
   if (o.live) strokeLine(x, o.live);
@@ -264,7 +276,10 @@ function setSheet(s) {
     el.classList.toggle('lasso', tool === 'lasso'); el.append(bg, svg, ov); Object.assign(pg, { el, bg, svg, ov }); $('#pages').append(el);
     pageEvents(pg);
   }
-  (async () => { for (const pg of s.pages) await renderBg(pg); })().catch(e => toast('Page drawing failed: ' + e.message));
+  let chain = Promise.resolve(); // pages are drawn one after another; each page's scan starts when its own drawing is done
+  const ready = s.pages.map(pg => (chain = chain.then(() => renderBg(pg))));
+  chain.catch(e => toast('Page drawing failed: ' + e.message));
+  M.pageIn(s.pages, ready);
 }
 async function renderBg(pg) {
   const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -278,11 +293,12 @@ async function renderBg(pg) {
 }
 function pageEvents(pg) {
   lassoEvents(pg);
+  pg.el.addEventListener('click', () => { if (ed && ed.pg === pg && document.activeElement !== $('#txt')) $('#txt').focus({ preventScroll: true }); }); // iPad: a second chance to open the keyboard inside the tap
   pg.el.addEventListener('pointerdown', e => { down = tool !== 'text' || e.target.closest('.tbox') ? null : { x: e.clientX, y: e.clientY, t: Date.now() }; });
   pg.el.addEventListener('pointerup', e => {
     const d = down; down = null;
     if (!d || e.target.closest('.tbox') || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10 || Date.now() - d.t > 700) return;
-    if (sel) return select(null); // first tap outside just closes the open box
+    if (sel) return select(null); // first tap outside just writes and closes the open box
     const [x, y] = toPage(pg, e), u = LS.get('u', 0) || +(pg.w * 0.016).toFixed(2), gap = LS.get('gap', 2.4);
     const box = { x: Math.max(0, x - 2), y: y - 1.75 * u, w: Math.max(60, Math.min(pg.w * 0.45, pg.w - x - 4)), u, gap, neat: LS.get('neat', 1), seed: (Math.random() * 1e9) | 0, text: '' };
     pg.boxes.push(box); addBoxEl(pg, box); renderInk(pg); select({ pg, box }, true);
@@ -293,7 +309,8 @@ function addBoxEl(pg, box) {
   box.el = el; pg.el.append(el);
   let drag = null;
   el.addEventListener('pointerdown', e => {
-    e.stopPropagation(); e.preventDefault(); el.setPointerCapture(e.pointerId);
+    e.stopPropagation(); if (e.target.id === 'txt') return; // taps inside the open text move the caret
+    e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
     const [x, y] = toPage(pg, e);
     drag = { id: e.pointerId, x, y, bx: box.x, by: box.y, bw: box.w, grip: e.target.classList.contains('grip'), moved: false, cx: e.clientX, cy: e.clientY };
   });
@@ -307,7 +324,7 @@ function addBoxEl(pg, box) {
   const up = e => {
     if (!drag || drag.id !== e.pointerId) return;
     const d = drag; drag = null;
-    if (!sel || sel.box !== box) select({ pg, box }, !d.moved); else if (!d.moved) $('#txt').focus({ preventScroll: true });
+    if (!sel || sel.box !== box) select({ pg, box }, !d.moved); else if (!d.moved) openEd(); else placeBar();
   };
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
 }
@@ -317,19 +334,59 @@ function renderInk(pg) {
     const r = b.r = lay(b); b.h = Math.max(r.height, b.u * 2.6);
     html += '<g>' + stkPaths(r, ink.color);
     html += (r.fills.length ? `<path class="fil" d="${pathD(r.fills, true)}" fill="${ink.color}"/>` : '') + '</g>';
-    const s = b.el.style; s.left = 100 * b.x / pg.w + '%'; s.top = 100 * b.y / pg.h + '%'; s.width = 100 * b.w / pg.w + '%'; s.height = 100 * b.h / pg.h + '%';
+    const s = b.el.style; s.left = 100 * b.x / pg.w + '%'; s.top = 100 * b.y / pg.h + '%'; s.width = 100 * b.w / pg.w + '%'; s.height = ed && ed.box === b ? 'auto' : 100 * b.h / pg.h + '%';
   }
   pg.svg.innerHTML = html;
-  pg.boxes.forEach((b, i) => (b.g = pg.svg.children[i]));
+  pg.boxes.forEach((b, i) => { b.g = pg.svg.children[i]; if (ed && ed.box === b) b.g.style.visibility = 'hidden'; }); // its handwriting hides while the text is open
   if (lsel && lsel.pg === pg) showSel();
+  if (sel && sel.pg === pg) placeBar();
 }
 function removeBox(s) { s.pg.boxes = s.pg.boxes.filter(b => b !== s.box); s.box.el.remove(); renderInk(s.pg); }
 function select(s, focus) {
-  if (sel) { sel.box.el.classList.remove('on'); if ((!s || s.box !== sel.box) && !sel.box.text.trim()) removeBox(sel); }
-  sel = s; $('#panel').hidden = !s;
-  if (!s) { $('#txt').blur(); return; }
-  s.box.el.classList.add('on'); $('#txt').value = s.box.text; $('#sz').value = s.box.u; $('#lg').value = s.box.gap; $('#nt').value = s.box.neat ?? 1;
-  if (focus) $('#txt').focus({ preventScroll: true });
+  if (sel) { closeEd(); sel.box.el.classList.remove('on'); if ((!s || s.box !== sel.box) && !sel.box.text.trim()) removeBox(sel); }
+  sel = s;
+  if (!s) { const p = $('#panel'); p.hidden = true; document.body.append(p); return; } // parked outside the pages so a new file can't delete it
+  s.box.el.classList.add('on'); $('#sz').value = s.box.u; $('#lg').value = s.box.gap; $('#nt').value = s.box.neat ?? 1;
+  if (focus) openEd(); else placeBar();
+}
+// ---------- typing right in the box: #txt sits inside the selected box in plain type; Enter, a tap outside or closing the keyboard turns it into handwriting
+let ed = null, barT = 0; // ed = the {pg, box} whose text is open; barT = last touch on the box bar (that must not close the text)
+function openEd() {
+  if (!sel) return;
+  const t = $('#txt'), { box } = sel;
+  if (ed !== sel) { closeEd(); ed = sel; box.el.classList.add('edit'); box.el.append(t); t.hidden = false; t.value = box.text; renderInk(sel.pg); }
+  fitEd(); t.focus({ preventScroll: true }); t.setSelectionRange(t.value.length, t.value.length); keepVisible();
+}
+function closeEd() {
+  if (!ed) return;
+  const { pg, box } = ed, t = $('#txt'); ed = null;
+  box.el.classList.remove('edit'); renderInk(pg);
+  if (box.text.trim()) { M.handover(box.el, t); M.writeOn(box.g, 1.5); }
+  t.hidden = true; document.body.append(t); t.blur();
+}
+function fitEd() { // typed text at the box's handwriting size, on screen pixels
+  if (!ed) return;
+  const { pg, box } = ed, t = $('#txt'), k = pg.el.clientWidth / pg.w;
+  t.style.fontSize = 1.75 * box.u * k + 'px'; t.style.lineHeight = box.gap * box.u * k + 'px'; t.style.minHeight = 2.6 * box.u * k + 'px';
+  t.style.height = 'auto'; t.style.height = t.scrollHeight + 'px';
+  placeBar();
+}
+function placeBar() { // above the box like the lasso menu; under it when there is no room above
+  if (!sel) return;
+  const p = $('#panel'), el = sel.box.el, W = sel.pg.el.clientWidth;
+  if (p.parentNode !== sel.pg.el) sel.pg.el.append(p); // moving it would replay its fade-in on every redraw
+  p.hidden = false;
+  const top = el.offsetTop - p.offsetHeight - 12, x = el.offsetLeft + el.offsetWidth / 2 - p.offsetWidth / 2;
+  p.style.left = Math.max(0, Math.min(x, W - p.offsetWidth)) + 'px';
+  p.style.top = (top < 0 ? el.offsetTop + el.offsetHeight + 12 : top) + 'px';
+}
+function keepVisible() { // the iPad keyboard covers the bottom: scroll the open box (and its bar) into what is left
+  if (!ed) return;
+  const vv = window.visualViewport, vt = vv ? vv.offsetTop : 0, vb = vt + (vv ? vv.height : innerHeight);
+  const top = Math.max(vt, $('#sheet > .title-row').getBoundingClientRect().bottom) + 8;
+  const a = ed.box.el.getBoundingClientRect(), b = $('#panel').getBoundingClientRect(), y0 = Math.min(a.top, b.top), y1 = Math.max(a.bottom, b.bottom);
+  let d = y1 > vb - 12 ? y1 - vb + 12 : 0; if (y0 - d < top) d = y0 - top;
+  if (Math.abs(d) > 2) scrollBy({ top: d, behavior: M.can() ? 'smooth' : 'auto' });
 }
 // ---------- Lasso tool: circle letters, then drag to move, drag a corner to resize, or rewrite them in a fresh variation
 let tool = 'text', lsel = null; // every visit starts on Text, so a tap always adds a box
@@ -497,14 +554,23 @@ function wire() {
   markInk();
   $('#thick').value = ink.thick;
   $('#thick').oninput = () => { ink.thick = +$('#thick').value; LS.set('thick', ink.thick); if (sheet) sheet.pages.forEach(renderInk); };
-  $('#txt').oninput = () => { if (sel) { sel.box.text = $('#txt').value; sel.box.mods = null; renderInk(sel.pg); } }; // shortcut: lasso edits are keyed by letter index, so typing drops them
-  $('#sz').oninput = () => { if (sel) { sel.box.u = +$('#sz').value; LS.set('u', sel.box.u); renderInk(sel.pg); } };
-  $('#lg').oninput = () => { if (sel) { sel.box.gap = +$('#lg').value; LS.set('gap', sel.box.gap); renderInk(sel.pg); } };
-  $('#nt').oninput = () => { if (sel) { sel.box.neat = +$('#nt').value; LS.set('neat', sel.box.neat); renderInk(sel.pg); } };
+  const t = $('#txt');
+  t.oninput = () => { // one line per box: pasted line breaks become spaces
+    if (!ed) return;
+    if (/[\r\n]/.test(t.value)) { const c = t.selectionStart; t.value = t.value.replace(/\r?\n|\r/g, ' '); t.setSelectionRange(c, c); }
+    ed.box.text = t.value; ed.box.mods = null; fitEd(); // shortcut: lasso edits are keyed by letter index, so typing drops them
+  };
+  t.onkeydown = e => { if ((e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) || e.key === 'Escape') { e.preventDefault(); select(null); } }; // 229 = Thai keyboard still composing
+  t.onblur = () => { if (ed && Date.now() - barT > 400) closeEd(); }; // keyboard closed: write it, keep the box selected
+  const bar = $('#panel'), stop = e => { e.stopPropagation(); barT = Date.now(); };
+  bar.addEventListener('pointerdown', stop); bar.addEventListener('pointerup', e => { stop(e); if (ed && document.activeElement !== t) t.focus({ preventScroll: true }); });
+  const knob = (id, key, f) => ($(id).oninput = () => { if (sel) { sel.box[key] = +$(id).value; LS.set(f, sel.box[key]); renderInk(sel.pg); fitEd(); } });
+  knob('#sz', 'u', 'u'); knob('#lg', 'gap', 'gap'); knob('#nt', 'neat', 'neat');
+  addEventListener('resize', () => (ed ? fitEd() : placeBar()));
+  if (window.visualViewport) visualViewport.addEventListener('resize', keepVisible);
   $('#ver').textContent = 'LaiMue version ' + H.VERSION;
-  $('#shuf').onclick = () => { if (sel) { sel.box.seed = (Math.random() * 1e9) | 0; renderInk(sel.pg); M.writeOn(sel.box.g, 1.5); } };
-  $('#del').onclick = () => { if (!sel) return; const s = sel; sel = null; $('#panel').hidden = true; removeBox(s); };
-  $('#done').onclick = () => select(null);
+  $('#shuf').onclick = () => { if (!sel) return; closeEd(); sel.box.seed = (Math.random() * 1e9) | 0; renderInk(sel.pg); M.writeOn(sel.box.g, 1.5); };
+  $('#del').onclick = () => { if (sel) { sel.box.text = ''; select(null); } }; // an empty box is removed on close
   const ios = navigator.maxTouchPoints > 1 && /iPad|iPhone|Macintosh/.test(navigator.userAgent);
   const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   if (ios && !standalone && !LS.get('hint', false)) $('#installHint').hidden = false;
