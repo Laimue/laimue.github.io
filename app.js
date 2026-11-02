@@ -54,7 +54,7 @@ async function saveFile(blob, name) {
 }
 function offerShare(file) {
   const t = $('#toast'), b = document.createElement('button'); clearTimeout(toast.h);
-  b.textContent = '📤 Tap to share / save ' + file.name;
+  b.textContent = 'Tap to share or save ' + file.name;
   b.onclick = () => { t.hidden = true; navigator.share({ files: [file] }).catch(() => {}); };
   t.textContent = ''; t.append(b); t.hidden = false;
 }
@@ -63,7 +63,7 @@ async function loadHandFile(file) {
   let h = null; try { h = validHand(JSON.parse(await file.text())); } catch { }
   if (!h) return toast('That is not a LaiMue handwriting file.');
   if (taught() && !confirm('Replace the handwriting on this device with this file?')) return;
-  hand = h; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('Handwriting loaded ✓');
+  hand = h; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('Handwriting loaded');
 }
 function clearHand() {
   if (!taught()) return toast('There are no letters to clear yet.');
@@ -88,13 +88,13 @@ const slots = ch => hand.g[ch] || (hand.g[ch] = [null, null, null, null, null]);
 function buildBoxes() {
   for (let i = 0; i < PER; i++) {
     const wrap = document.createElement('div'); wrap.className = 'box';
-    wrap.innerHTML = '<canvas></canvas><span class="lbl"></span><span class="act"><button data-a="undo" aria-label="Undo">↶</button><button data-a="clear" aria-label="Clear">✕</button></span>';
+    wrap.innerHTML = '<canvas></canvas><span class="lbl"></span><span class="act"><button data-a="undo" aria-label="Undo"><svg class="i"><use href="#i-undo"/></svg></button><button data-a="clear" aria-label="Clear"><svg class="i"><use href="#i-x"/></svg></button></span>';
     const cv = wrap.querySelector('canvas'); cells.push({ wrap, cv, lbl: wrap.querySelector('.lbl') }); $('#boxes').append(wrap);
     wrap.querySelector('[data-a=undo]').onclick = () => edit(i, s => (s.pop(), s));
     wrap.querySelector('[data-a=clear]').onclick = () => edit(i, () => []);
     attachPen(cv, i);
   }
-  const vr = $('#verRow'); vr.append('Version ');
+  const vr = $('#verRow');
   for (let v = 0; v < 5; v++) {
     const b = document.createElement('button'); b.textContent = v + 1; b.dataset.v = v;
     b.onclick = () => { ver = v; LS.set('ver', v); renderTeach(); }; vr.append(b);
@@ -125,7 +125,7 @@ function drawBox(i) {
 function attachPen(cv, i) {
   const pt = e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * H.BOX_W).toFixed(3), +((e.clientY - r.top) / r.height * H.BOX_H).toFixed(3)]; };
   cv.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); }
+    if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); document.body.classList.add('pen-seen'); }
     if ((e.pointerType === 'touch' && penSeen) || drawing || !cellChar(i)) return; // palm rejection once a Pencil was used
     e.preventDefault(); cv.setPointerCapture(e.pointerId);
     drawing = { i, id: e.pointerId, pts: pt(e) }; drawBox(i);
@@ -150,7 +150,7 @@ function attachPen(cv, i) {
 function renderTeach() {
   cells.forEach((c, i) => { const ch = cellChar(i); c.wrap.hidden = !ch; if (ch) c.lbl.textContent = label(ch.ch); });
   const groups = [...new Set(CHARS.slice(page * PER, page * PER + PER).map(c => c.group))].join(' · ');
-  $('#pageInfo').textContent = `Page ${page + 1}/${PAGES} · ${groups}`;
+  $('#pageInfo').innerHTML = `<b>Page ${page + 1} of ${PAGES}</b> · ${groups}`;
   document.querySelectorAll('#verRow button').forEach(b => b.classList.toggle('on', +b.dataset.v === ver));
   LS.set('page', page); cells.forEach((_, i) => drawBox(i)); progress();
 }
@@ -165,10 +165,10 @@ function progress() {
   renderPreview();
   const done = taught();
   $('#progFill').style.width = (100 * done / REQ.length) + '%';
-  $('#progText').textContent = `${done}/${REQ.length} letters taught` + (done === REQ.length ? ' ✓ Done! Extra pages and versions are optional.' : '');
+  $('#progText').textContent = `${done}/${REQ.length} letters taught` + (done === REQ.length ? '. All done; extra pages and versions are optional.' : '');
   if (done === REQ.length && !LS.get('doneNag', false)) {
     LS.set('doneNag', true);
-    setTimeout(() => { if (confirm('All letters taught! 🎉 Save your handwriting file now as a backup?')) saveHandFile(); }, 300);
+    setTimeout(() => { if (confirm('All letters taught. Save your handwriting file now as a backup?')) saveHandFile(); }, 300);
   }
 }
 const step = d => { page = (page + d + PAGES) % PAGES; renderTeach(); scrollTo(0, 0); };
@@ -176,7 +176,7 @@ const step = d => { page = (page + d + PAGES) % PAGES; renderTeach(); scrollTo(0
 // ---------- Worksheet screen
 let sheet = null, sel = null, down = null;
 const ink = { color: LS.get('color', '#1a1a1a'), thick: LS.get('thick', 1) };
-const lay = b => H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1 });
+const lay = b => H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods });
 const pathD = (arrs, close) => arrs.map(a => {
   let s = 'M' + a[0].toFixed(2) + ' ' + a[1].toFixed(2) + (a.length === 2 ? 'l0.01 0' : '');
   for (let i = 2; i < a.length; i += 2) s += 'L' + a[i].toFixed(2) + ' ' + a[i + 1].toFixed(2);
@@ -209,13 +209,14 @@ async function openImage(file) {
   setSheet({ name: file.name, kind: 'img', jpg, img: cv, pages: [{ w: 595, h: 595 * cv.height / cv.width, boxes: [] }] });
 }
 function setSheet(s) {
-  select(null); sheet = s; $('#pages').innerHTML = ''; $('#exportBtn').disabled = false;
-  $('#sheetHint').textContent = 'Tap where an answer goes to add a text box. Drag a box to move it; drag its blue handle to change the width.';
+  select(null); clearSel(); sheet = s; $('#pages').innerHTML = ''; $('#exportBtn').disabled = false;
+  $('#empty').hidden = true; $('#sheetName').textContent = s.name.replace(/\.[^.]+$/, '');
   for (const pg of s.pages) {
     const el = document.createElement('div'); el.className = 'page'; el.style.aspectRatio = pg.w + ' / ' + pg.h; el.style.maxWidth = '1000px';
     const bg = document.createElement('canvas'), svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', `0 0 ${pg.w} ${pg.h}`); svg.setAttribute('preserveAspectRatio', 'none');
-    el.append(bg, svg); Object.assign(pg, { el, bg, svg }); $('#pages').append(el);
+    const ov = document.createElementNS(NS, 'svg'); ov.setAttribute('class', 'lz'); ov.setAttribute('viewBox', `0 0 ${pg.w} ${pg.h}`); ov.setAttribute('preserveAspectRatio', 'none');
+    el.classList.toggle('lasso', tool === 'lasso'); el.append(bg, svg, ov); Object.assign(pg, { el, bg, svg, ov }); $('#pages').append(el);
     pageEvents(pg);
   }
   (async () => { for (const pg of s.pages) await renderBg(pg); })().catch(e => toast('Page drawing failed: ' + e.message));
@@ -231,7 +232,8 @@ async function renderBg(pg) {
   } else { pg.bg.width = sheet.img.width; pg.bg.height = sheet.img.height; x.drawImage(sheet.img, 0, 0); }
 }
 function pageEvents(pg) {
-  pg.el.addEventListener('pointerdown', e => { down = e.target.closest('.tbox') ? null : { x: e.clientX, y: e.clientY, t: Date.now() }; });
+  lassoEvents(pg);
+  pg.el.addEventListener('pointerdown', e => { down = tool !== 'text' || e.target.closest('.tbox') ? null : { x: e.clientX, y: e.clientY, t: Date.now() }; });
   pg.el.addEventListener('pointerup', e => {
     const d = down; down = null;
     if (!d || e.target.closest('.tbox') || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10 || Date.now() - d.t > 700) return;
@@ -267,12 +269,13 @@ function addBoxEl(pg, box) {
 function renderInk(pg) {
   let html = '';
   for (const b of pg.boxes) {
-    const r = lay(b); b.h = Math.max(r.height, b.u * 2.6);
+    const r = b.r = lay(b); b.h = Math.max(r.height, b.u * 2.6);
     html += penPaths(r, ink.color);
     if (r.fills.length) html += `<path d="${pathD(r.fills, true)}" fill="${ink.color}"/>`;
     const s = b.el.style; s.left = 100 * b.x / pg.w + '%'; s.top = 100 * b.y / pg.h + '%'; s.width = 100 * b.w / pg.w + '%'; s.height = 100 * b.h / pg.h + '%';
   }
   pg.svg.innerHTML = html;
+  if (lsel && lsel.pg === pg) showSel();
 }
 function removeBox(s) { s.pg.boxes = s.pg.boxes.filter(b => b !== s.box); s.box.el.remove(); renderInk(s.pg); }
 function select(s, focus) {
@@ -282,6 +285,92 @@ function select(s, focus) {
   s.box.el.classList.add('on'); $('#txt').value = s.box.text; $('#sz').value = s.box.u; $('#lg').value = s.box.gap; $('#nt').value = s.box.neat ?? 1;
   if (focus) $('#txt').focus({ preventScroll: true });
 }
+// ---------- Lasso tool: circle letters, then drag to move, drag a corner to resize, or rewrite them in a fresh variation
+let tool = 'text', lsel = null; // every visit starts on Text, so a tap always adds a box
+function setTool(t) {
+  tool = t; select(null); clearSel();
+  document.querySelectorAll('[data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+  if (sheet) sheet.pages.forEach(pg => pg.el.classList.toggle('lasso', t === 'lasso'));
+}
+const inPoly = (x, y, P) => { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const [xi, yi] = P[i], [xj, yj] = P[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; };
+const cbOf = it => it.b.r && it.b.r.cb[it.ci];
+const mid = c => [(c[0] + c[2]) / 2, (c[1] + c[3]) / 2];
+const modOf = it => { const m = it.b.mods || (it.b.mods = {}); return m[it.ci] || (m[it.ci] = {}); };
+function selBox() {
+  const B = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const it of lsel.items) { const c = cbOf(it); if (!c) continue; B[0] = Math.min(B[0], c[0]); B[1] = Math.min(B[1], c[1]); B[2] = Math.max(B[2], c[2]); B[3] = Math.max(B[3], c[3]); }
+  return B;
+}
+function showSel() {
+  const { pg } = lsel, [x0, y0, x1, y1] = selBox(), pad = 3, menu = $('#lassoMenu');
+  if (!lsel.el) { lsel.el = document.createElement('div'); lsel.el.className = 'lsel'; lsel.el.innerHTML = ['nw', 'ne', 'sw', 'se'].map(h => `<span class="h ${h}" data-h="${h}"></span>`).join(''); pg.el.append(lsel.el); }
+  const s = lsel.el.style; s.left = 100 * (x0 - pad) / pg.w + '%'; s.top = 100 * (y0 - pad) / pg.h + '%'; s.width = 100 * (x1 - x0 + 2 * pad) / pg.w + '%'; s.height = 100 * (y1 - y0 + 2 * pad) / pg.h + '%';
+  if (lsel.busy) return;
+  pg.el.append(menu); menu.hidden = false;
+  const below = y0 - pad < 0.08 * pg.h; // no room above: show the menu under the selection
+  menu.style.left = 100 * (x0 + x1) / 2 / pg.w + '%'; menu.style.top = 100 * (below ? y1 + pad : y0 - pad) / pg.h + '%';
+  menu.style.transform = below ? 'translate(-50%, 14px)' : '';
+}
+function clearSel() {
+  if (lsel) { if (lsel.el) lsel.el.remove(); lsel.pg.ov.innerHTML = ''; }
+  lsel = null; const m = $('#lassoMenu'); m.hidden = true; document.body.append(m); // parked outside the pages so a new file can't delete it
+}
+function selectIn(pg, pts) {
+  const items = [];
+  for (const b of pg.boxes) (b.r || (b.r = lay(b))).cb.forEach((c, ci) => { if (c) { const [x, y] = mid(c); if (inPoly(x, y, pts)) items.push({ b, ci }); } });
+  if (!items.length) return toast('No letters inside the loop. Circle the letters you want to change.');
+  lsel = { pg, items }; showSel();
+}
+function lassoAct(a) {
+  if (!lsel) return;
+  if (a === 'done') return clearSel();
+  for (const it of lsel.items) {
+    if (a === 'shuffle') modOf(it).seed = 1 + ((Math.random() * 1e9) | 0);
+    else if (it.b.mods) delete it.b.mods[it.ci];
+  }
+  renderInk(lsel.pg);
+}
+function lassoEvents(pg) {
+  let g = null;
+  const ok = e => e.pointerType !== 'touch' || !penSeen; // once a Pencil is used, fingers scroll and only the Pencil lassos
+  const draw = () => { if (!g.raf) g.raf = requestAnimationFrame(() => { g.raf = 0; renderInk(pg); }); };
+  pg.el.addEventListener('pointerdown', e => {
+    if (tool !== 'lasso' || g || !ok(e) || e.target.closest('#lassoMenu')) return;
+    e.preventDefault(); try { pg.el.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
+    if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); document.body.classList.add('pen-seen'); }
+    const p = toPage(pg, e), h = e.target.closest('.h');
+    if (lsel && lsel.pg === pg && e.target.closest('.lsel')) {
+      const B = selBox(), anchor = h ? [h.dataset.h[1] === 'w' ? B[2] : B[0], h.dataset.h[0] === 'n' ? B[3] : B[1]] : null;
+      g = { id: e.pointerId, kind: h ? 'size' : 'move', p, anchor, d0: anchor && Math.hypot(p[0] - anchor[0], p[1] - anchor[1]),
+        st: lsel.items.map(it => { const m = modOf(it); return { dx: m.dx || 0, dy: m.dy || 0, s: m.s || 1, c: mid(cbOf(it)) }; }) };
+      lsel.busy = true; $('#lassoMenu').hidden = true;
+    } else { clearSel(); g = { id: e.pointerId, kind: 'loop', pts: [p] }; }
+  });
+  pg.el.addEventListener('pointermove', e => {
+    if (!g || g.id !== e.pointerId) return;
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [], last = evs.length ? evs[evs.length - 1] : e, p = toPage(pg, last);
+    if (g.kind === 'loop') {
+      for (const ev of evs.length ? evs : [e]) { const q = toPage(pg, ev), l = g.pts[g.pts.length - 1]; if (Math.hypot(q[0] - l[0], q[1] - l[1]) > 1) g.pts.push(q); }
+      pg.ov.innerHTML = `<path d="M${g.pts.map(q => q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('L')}Z"/>`;
+    } else if (g.kind === 'move') {
+      lsel.items.forEach((it, i) => { const m = modOf(it); m.dx = g.st[i].dx + p[0] - g.p[0]; m.dy = g.st[i].dy + p[1] - g.p[1]; }); draw();
+    } else {
+      const k = Math.min(Math.max(Math.hypot(p[0] - g.anchor[0], p[1] - g.anchor[1]) / (g.d0 || 1), 0.25), 4), A = g.anchor;
+      lsel.items.forEach((it, i) => { const m = modOf(it), s = g.st[i]; m.s = s.s * k; m.dx = s.dx + (A[0] + (s.c[0] - A[0]) * k - s.c[0]); m.dy = s.dy + (A[1] + (s.c[1] - A[1]) * k - s.c[1]); }); draw();
+    }
+  });
+  const up = e => {
+    if (!g || g.id !== e.pointerId) return;
+    const d = g; g = null; if (d.raf) cancelAnimationFrame(d.raf);
+    if (d.kind === 'loop') {
+      pg.ov.innerHTML = '';
+      const xs = d.pts.map(q => q[0]), ys = d.pts.map(q => q[1]);
+      if (d.pts.length > 3 && Math.max(...xs) - Math.min(...xs) + Math.max(...ys) - Math.min(...ys) > 6) selectIn(pg, d.pts);
+    } else { lsel.busy = false; renderInk(pg); }
+  };
+  pg.el.addEventListener('pointerup', up); pg.el.addEventListener('pointercancel', up);
+}
+
 const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255);
 async function buildPdf() {
   const P = PDFLib; let pdf;
@@ -340,7 +429,13 @@ function wire() {
     if (e.key === 'ArrowRight') step(1); else if (e.key === 'ArrowLeft') step(-1);
   });
   addEventListener('resize', () => { if (!$('#teach').hidden) cells.forEach((_, i) => drawBox(i)); });
-  $('#openBtn').onclick = () => $('#openFile').click();
+  $('#openBtn').onclick = $('#openBtn2').onclick = () => $('#openFile').click();
+  document.querySelectorAll('[data-tool]').forEach(b => (b.onclick = () => setTool(b.dataset.tool))); setTool(tool);
+  document.querySelectorAll('#lassoMenu button').forEach(b => (b.onclick = e => { e.stopPropagation(); lassoAct(b.dataset.l); }));
+  if (penSeen) document.body.classList.add('pen-seen');
+  // iPad: no pinch zoom of the whole app; a Pencil on a drawing surface never scrolls the page
+  for (const g of ['gesturestart', 'gesturechange']) document.addEventListener(g, e => e.preventDefault(), { passive: false });
+  document.addEventListener('touchmove', e => { if ([...e.touches].some(t => t.touchType === 'stylus') && e.target.closest('.box canvas, .page.lasso')) e.preventDefault(); }, { passive: false });
   $('#openFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openFile(f); };
   $('#exportBtn').onclick = exportPdf;
   const inkBtns = document.querySelectorAll('.ink');
@@ -349,7 +444,7 @@ function wire() {
   markInk();
   $('#thick').value = ink.thick;
   $('#thick').oninput = () => { ink.thick = +$('#thick').value; LS.set('thick', ink.thick); if (sheet) sheet.pages.forEach(renderInk); };
-  $('#txt').oninput = () => { if (sel) { sel.box.text = $('#txt').value; renderInk(sel.pg); } };
+  $('#txt').oninput = () => { if (sel) { sel.box.text = $('#txt').value; sel.box.mods = null; renderInk(sel.pg); } }; // shortcut: lasso edits are keyed by letter index, so typing drops them
   $('#sz').oninput = () => { if (sel) { sel.box.u = +$('#sz').value; LS.set('u', sel.box.u); renderInk(sel.pg); } };
   $('#lg').oninput = () => { if (sel) { sel.box.gap = +$('#lg').value; LS.set('gap', sel.box.gap); renderInk(sel.pg); } };
   $('#nt').oninput = () => { if (sel) { sel.box.neat = +$('#nt').value; LS.set('neat', sel.box.neat); renderInk(sel.pg); } };

@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 13; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 14; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -753,23 +753,26 @@
     const W = { sz: 0, fast: 0, ln: 0 }, cl2 = x => Math.min(Math.max(x, -2), 2);
     const step = () => { for (const k in W) W[k] = 0.8 * W[k] + 0.6 * (R() + R() + R() - 1.5) * 2; };
     const fastNow = () => Math.min(Math.max(W.fast + Math.min(0.03 * line, 0.3), -1.5), 1.5);
-    const pick = ch => {
+    const mods = o.mods || {}; let ci = -1; // lasso edits per cluster: {dx, dy, s, seed}
+    const pickR = (ch, R, keep) => {
       const vs = cache[ch] || (cache[ch] = variantsFor(hand, ch, o.fb, P)); if (!vs.length) return null;
       let i = (R() * vs.length) | 0;
       if (vs.length > 1 && i === last[ch]) i = (i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length;
-      last[ch] = i; let v = vs[i];
+      if (keep) last[ch] = i; let v = vs[i];
       if (vs.length > 1 && v.s) { const w = vs[(i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length], m = w.s && match(v, w); if (m) v = blend(m, R()); } // somewhere between two of their versions
       const ref = o.fb && o.fb(ch);
       return vary(v, ch, R, fastNow(), ref && ref.p ? typedLook(ref, P.sl || 0) : null, refPick(vs[i], ch), sty);
     };
+    // a reshuffled letter still draws from R first, so every other letter stays exactly as it was
+    const pick = ch => { const v = pickR(ch, R, true), m = mods[ci]; return m && m.seed ? pickR(ch, rng(m.seed * 31 + ch.codePointAt(0)), false) : v; };
     const warp = () => ({ ax: J(0.03), ay: J(0.03), fx: 3 + R() * 4, fy: 3 + R() * 4, px: R() * 6.3, py: R() * 6.3 });
     const maxW = o.width / o.u, L = o.gap || 2.4, U = o.u;
-    const strokes = [], fills = [], pws = [];
+    const strokes = [], fills = [], pws = [], cb = [];
     let cx = 0, line = 0, phase = R() * 6.3, slope = V(0.012), wrapped = false;
     const newline = auto => { line++; cx = 0; phase = R() * 6.3; slope = V(0.012); wrapped = auto; }; // each line runs a touch up or down
     const emit = it => {
       const by = FIRST + line * L + 0.06 * mess * Math.sin(cx * 0.35 + phase) + slope * cx + it.jy;
-      const c = Math.cos(it.th), s = Math.sin(it.th);
+      const c = Math.cos(it.th), s = Math.sin(it.th), mine = [];
       it.parts.forEach((p0, k) => {
         const w = it.warps[k], list = p0.v.s ? strokes : fills;
         let p = p0;
@@ -792,9 +795,19 @@
             out[i] = o.x + U * (cx + it.sc * (lx * c - ly * s));
             out[i + 1] = o.y + U * (by + it.sc * (lx * s + ly * c));
           }
-          list.push(out);
+          list.push(out); mine.push(out);
         }
       });
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const a of mine) for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); }
+      if (!mine.length) { cb[it.ci] = null; return; }
+      const m = mods[it.ci];
+      if (m && (m.dx || m.dy || (m.s && m.s !== 1))) { // scale about the letter's own centre, then move
+        const k = m.s || 1, mx = (x0 + x1) / 2, my = (y0 + y1) / 2, dx = m.dx || 0, dy = m.dy || 0;
+        for (const a of mine) for (let i = 0; i < a.length; i += 2) { a[i] = mx + (a[i] - mx) * k + dx; a[i + 1] = my + (a[i + 1] - my) * k + dy; }
+        x0 = mx + (x0 - mx) * k + dx; x1 = mx + (x1 - mx) * k + dx; y0 = my + (y0 - my) * k + dy; y1 = my + (y1 - my) * k + dy;
+      }
+      cb[it.ci] = [x0, y0, x1, y1];
     };
     for (const seg of words(text)) {
       if (seg === '\n') { newline(false); continue; }
@@ -802,11 +815,11 @@
       let prev = null;
       const items = parse(seg).map(cl => {
         if (cl.sp) { prev = null; return { sp: true, w: SPACE * (1 + V(0.3)) }; }
-        step(); const f = fastNow();
+        step(); const f = fastNow(); ci++;
         const b = buildCluster(cl, pick), sc = wz * (1 + vr * (0.06 * cl2(W.sz) + 0.0375 * u())), sw = 1 + vr * (0.16 * u() + 0.1 * f);
         const w = b.parts.length ? sc * sw * (b.x1 - b.x0) : 0.5, gx = vr * (0.04 * u() + 0.03 * f);
         const it = { ...b, sc, sw, sh: sh + vr * (0.06 * cl2(W.ln) + 0.04 * f), w, gap: 0.1 + J(0.03) + gx, th: J(0.035) + V(0.026), jy: J(0.02), warps: b.parts.map(warp), dk: 0,
-          pw, tall: TALL.has(cl.base), mu: V(0.03), ml: V(0.03) };
+          pw, tall: TALL.has(cl.base), mu: V(0.03), ml: V(0.03), ci };
         if (b.parts.length) {
           it.pr = profile(it);
           const d = prev ? kern(prev, it) : -Infinity; // space by the visible gap, not the boxes
@@ -828,7 +841,7 @@
       }
     }
     const lw = U * 0.075 * (o.thick || 1), pens = [0.93, 1, 1.07].map(k => [lw * k, strokes.filter((_, i) => pws[i] === k)]).filter(g => g[1].length);
-    return { strokes, fills, pens, lines: line + 1, height: (FIRST + line * L + 0.85) * U, lw }; // pens: [line width, strokes] by pen pressure
+    return { strokes, fills, pens, cb, lines: line + 1, height: (FIRST + line * L + 0.85) * U, lw }; // pens: [line width, strokes] by pen pressure
   }
 
   // Test helper: a fake person who writes the font's centre lines with a pen. messy: each letter at its own
@@ -1071,6 +1084,14 @@
         }
       }
       t('dragged lines stay straight', runs > 20 && worst < 0.006, runs + ' long runs, worst extra bend ' + worst.toFixed(4)); }
+    { // lasso edits: move/scale touch only their letter; a reshuffle leaves earlier letters and every letter's count alone
+      const o = { x: 0, y: 0, width: 400, u: 16, gap: 2.4, seed: 5, fb }, txt = 'สวัสดี ครับ', A = layout(txt, mh, o);
+      const B = layout(txt, mh, { ...o, mods: { 2: { dx: 10, dy: -4, s: 1.5 } } }), S = layout(txt, mh, { ...o, mods: { 3: { seed: 99 } } });
+      const same = (a, b) => a && b && a.every((v, i) => Math.abs(v - b[i]) < 1e-9);
+      const others = A.cb.every((b, i) => i === 2 || same(b, B.cb[i])), a2 = A.cb[2], b2 = B.cb[2];
+      const moved = Math.abs((b2[0] + b2[2]) / 2 - (a2[0] + a2[2]) / 2 - 10) < 1e-6 && Math.abs((b2[2] - b2[0]) - 1.5 * (a2[2] - a2[0])) < 1e-6;
+      t('lasso move/resize only its letter', others && moved && A.cb.length > 6);
+      t('lasso reshuffle redraws only from that letter', A.cb.slice(0, 3).every((b, i) => same(b, S.cb[i])) && !same(A.cb[3], S.cb[3]) && S.cb.length === A.cb.length); }
     return r;
   }
 
