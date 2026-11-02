@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 12; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 13; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -154,6 +154,26 @@
     }
     return null;
   }
+  // Top of a letter's body under a thin flick that rises over it (ศ ส ซ), else the ink top. Rows 0.02 deep from the top:
+  // the body starts at the first row whose ink spans >= 50% of the body's width (its lower 60%: a flick sticking out
+  // sideways doesn't count); a flick is thin (rows above it average < 35%). force: known flick, skip the thin test.
+  function bodyTop(v, force) {
+    const b = bbox(v), h = b.y1 - b.y0, n = Math.ceil(h / 0.02) + 1, lo = new Array(n).fill(Infinity), hi = new Array(n).fill(-Infinity);
+    ink(v, (x, y) => { const r = Math.min(n - 1, Math.floor((y - b.y0) / 0.02)); if (x < lo[r]) lo[r] = x; if (x > hi[r]) hi[r] = x; }, 0.01);
+    let bx0 = Infinity, bx1 = -Infinity; for (let r = 0; r < n; r++) if (r * 0.02 >= 0.4 * h && hi[r] >= lo[r]) { bx0 = Math.min(bx0, lo[r]); bx1 = Math.max(bx1, hi[r]); }
+    const W = bx1 > bx0 ? bx1 - bx0 : b.x1 - b.x0;
+    for (let r = 0, sum = 0; r < n && r * 0.02 < 0.5 * h; r++) {
+      const sp = hi[r] > lo[r] ? hi[r] - lo[r] : 0;
+      if (sp >= 0.5 * W) return force || (r * 0.02 >= 0.08 * h && sum / Math.max(r, 1) < 0.35 * W) ? b.y0 + r * 0.02 : b.y0;
+      sum += sp;
+    }
+    return b.y0;
+  }
+  // Scale heights so the body's top and bottom land on t0, t1; a flick (fl) rides along at any length.
+  function keepH(s, t0, t1, fl) {
+    const o = { p: s }, b = bbox(o), y0 = fl ? bodyTop(o, true) : b.y0, z = (t1 - t0) / Math.max(b.y1 - y0, 0.01);
+    return s.map(a => a.map((q, i) => (i % 2 ? t0 + (q - y0) * z : q)));
+  }
   // Drawn letters float, lean and vary in size: smooth the pen, lean each like this person's usual slant,
   // then move it onto the line where the reference font puts that letter, at the reference size.
   const NORM = new WeakMap();
@@ -172,6 +192,9 @@
     const mark = needsGhost(ch), plain = !mark && fr.y0 >= XH - 0.15 && fr.y1 <= BASE + 0.15; // no tail: exact same height
     const kh = D(f.y1 - f.y0, E) / Math.max(u.y1 - u.y0, 0.02), kw = D(f.x1 - f.x0, E) / Math.max(u.x1 - u.x0, 0.02);
     let k = kh, lo = 0, hi = Infinity;
+    if (plain) { // a flick over the body (ศ ส) may be drawn any length: size by the body under it
+      if (bodyTop(w) > bbox(w).y0 || bodyTop(ref) > fr.y0) k = D(f.y1 - bodyTop(ref, true), E) / Math.max(u.y1 - bodyTop(w, true), 0.02); // a flick on either: both measured under it
+    }
     // the limits only guard against odd drawings (a flat mark, a giant tail); checkLetter flags a letter that hits them
     if (mark) { k = Math.hypot(D(f.x1 - f.x0, E), D(f.y1 - f.y0, E)) / Math.max(Math.hypot(u.x1 - u.x0, u.y1 - u.y0), 0.02); lo = 0.6 * S; hi = 1.6 * S; }
     else if (!plain) { // size by the letter's body only: its tail may be drawn any length
@@ -186,7 +209,7 @@
     // and smooth at page size, so a letter drawn tiny and blown up gets the same pen as one drawn big.
     const L = typedLook(ref, P.sl || 0), F = fitInk(st, L, !plain && ch !== AM); // plain letters and ำ (stands on the line) keep their exact height and line
     if (F) st = F;
-    st = st.map(a => resample(a, 0.016)); const s0 = F && smooth(st); if (F) st = pull(st, L); st = smooth(st);
+    st = st.map(a => resample(a, 0.016)); const s0 = F && smooth(st); if (F) st = calm(pull(st, L), st, dragW(st, L)); st = smooth(st); // the pull may bend a dragged line, never dent it
     const r4 = s => s.map(a => a.map(q => +q.toFixed(4)));
     const out = { s: r4(st) }; if (s0) out.s0 = r4(s0); // s0: the same letter with no pull (pull and smooth are linear, so copies can mix the two)
     NORM.set(v, { key, v: out }); return out;
@@ -477,8 +500,9 @@
     }
     const t = Math.min(Math.max(0.3 + 0.5 * (R() + R() - 1) - 0.1 * fast - (rf ? 0.5 * rf.a : 0), 0), 0.8); // pull toward typed: 0 = as drawn, today's look 0.3; person, typed and mold share the letter
     const ky = 0.32 * u(), kx = 0.32 * u(), kt = 0.16 * u(), kl = 0.15 * u(), sh = src.map(() => [0.022 * u(), 0.022 * u()]);
+    const W = v.s ? dragOf(v, Lk) : null, fl = !TALL.has(ch) && !DOWN.has(ch) && bodyTop(v) > bbox(v).y0; // fl: a flick over the body
     const up = TALL.has(ch), down = DOWN.has(ch), soft = (fast > 0.6 ? 2 : fast > 0 ? 1 : 0) + (rf && rf.font && neat >= 0.5 ? 1 : 0); // a neat sheet molded on a font borrows its tidy curves
-    const np = src.reduce((q, a) => q + a.length / 2, 0), at = () => { let k = (R() * np) | 0; for (const a of src) { if (k < a.length / 2) return [a[2 * k], a[2 * k + 1]]; k -= a.length / 2; } };
+    const np = src.reduce((q, a) => q + a.length / 2, 0), at = () => { let k = (R() * np) | 0; for (let j = 0; j < src.length; j++) { const a = src[j]; if (k < a.length / 2) return [a[2 * k], a[2 * k + 1], W ? W[j][k] : 0]; k -= a.length / 2; } };
     // parts of the letter change (each change on in about half the copies): loops and heads, corners, stroke ends, bulges
     const ops = [];
     if (v.s) {
@@ -497,7 +521,7 @@
         ops.push((S, g) => endTurn(S[j], e, 1 + g * (z - 1), g * th));
       });
       if (on()) for (let n = R() < 0.5 ? 1 : 2; n > 0; n--) {
-        const [cx, cy] = at(), r = 0.2 + 0.2 * R(), A = (0.03 + 0.02 * R()) * (R() < 0.5 ? -1 : 1) * 2.33 / r; // 2.33: peak move = amplitude
+        const [cx, cy, wc] = at(), r = 0.2 + 0.2 * R(), A = (1 - wc) * (0.03 + 0.02 * R()) * (R() < 0.5 ? -1 : 1) * 2.33 / r; // 2.33: peak move = amplitude; none on a dragged line
         ops.push((S, g) => S.forEach(a => { for (let i = 0; i < a.length; i += 2) { const dx = a[i] - cx, dy = a[i + 1] - cy, e = g * A * Math.exp(-(dx * dx + dy * dy) / (r * r)); a[i] += e * dx; a[i + 1] += e * dy; } }));
       }
     }
@@ -506,14 +530,13 @@
       let s = src;
       if (v.s0) { // the mix keeps the letter's top and bottom, so its height stays on the lines
         s = v.s0.map((a, j) => a.map((q, i) => q + k * (v.s[j][i] - q)));
-        const m = bbox({ p: s }), n = bbox(v), z = (n.y1 - n.y0) / Math.max(m.y1 - m.y0, 0.01);
-        s = s.map(a => a.map((q, i) => (i % 2 ? n.y0 + (q - m.y0) * z : q)));
+        s = keepH(s, fl ? bodyTop(v, true) : bbox(v).y0, bbox(v).y1, fl);
       }
       if (rf || ops.length) {
-        const b1 = bbox({ p: s });
+        const b1 = bbox({ p: s }), t1 = fl ? bodyTop({ p: s }, true) : b1.y0;
         s = rf ? s.map((a, j) => a.map((q, i) => q + rf.a * rf.d[j][i])) : s.map(a => a.slice()); // the mold stays whole; g tames the rest
         for (const f of ops) f(s, g);
-        if (!up && !down) { const m = bbox({ p: s }), z = (b1.y1 - b1.y0) / Math.max(m.y1 - m.y0, 0.01); s = s.map(a => a.map((q, i) => (i % 2 ? b1.y0 + (q - m.y0) * z : q))); } // shape changes, not size: same top and bottom
+        if (!up && !down) s = keepH(s, t1, b1.y1, fl); // shape changes, not size: same body top and bottom
       }
       const b = bbox({ p: s });
       const w = Math.max(b.x1 - b.x0, 0.05), h = Math.max(b.y1 - b.y0, 0.05), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
@@ -529,6 +552,7 @@
         }
         return o;
       });
+      if (W) out = calm(out, src, W);
       if (v.s && g === 1) for (let n = 0; n < soft; n++) out = out.map(a => a.length > 16 ? smooth([a])[0] : a);
       return out;
     };
@@ -546,6 +570,83 @@
 
   // ---- Thai hand: parts of a letter (pen strokes, points ~0.016 apart) ----
   const cumLen = a => { const c = [0]; for (let i = 2; i < a.length; i += 2) c.push(c[c.length - 1] + Math.hypot(a[i] - a[i - 2], a[i + 1] - a[i - 1])); return c; };
+  // How a hand moves: a long straight line is dragged in one go and comes out neat (an L); curves, heads and short
+  // ticks are where a hand wobbles (an O, a B). Per point 0..1: 1 = on a long straight run, 0 = in a curve.
+  function dragW(st, L) {
+    const one = a => {
+      const c = cumLen(a), n = c.length, t = new Float64Array(n), w = new Float64Array(n);
+      for (let k = 0, i = 0, j = 0; k < n; k++) { // direction change over ±0.05 of ink
+        while (c[k] - c[i] > 0.05) i++; while (j < n - 1 && c[j] - c[k] < 0.05) j++;
+        if (i === k || j === k) continue;
+        const ux = a[2 * k] - a[2 * i], uy = a[2 * k + 1] - a[2 * i + 1], vx = a[2 * j] - a[2 * k], vy = a[2 * j + 1] - a[2 * k + 1];
+        t[k] = Math.abs(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy));
+      }
+      for (let i = 0; i < n;) { // straight runs (turning < 20°); one as long as 0.4 (most of the x-height) is a full drag
+        let j = i; while (j < n && t[j] < 0.35) j++;
+        if (j === i) { i++; continue; }
+        const f = Math.min(Math.max((c[j - 1] - c[i] - 0.08) / 0.3, 0), 1);
+        for (let k = i; k < j; k++) w[k] = f * (1 - t[k] / 0.7);
+        i = j;
+      }
+      return w;
+    };
+    const W = st.map(one); W.cn = st.map(a => corners(a)); // cn: notches and corners, kept at the drawn depth by calm
+    if (!L) return W;
+    // the typed letter says which lines are straight too, so a shaky drawn line that is straight there still counts as dragged
+    let tc = TRW.get(L); if (!tc) { const T = trace(L).map(a => resample(smooth([a])[0], 0.016)).filter(a => a.length >= 6); TRW.set(L, tc = { T, tw: T.map(one) }); }
+    const { T, tw } = tc;
+    if (!tc.tc) tc.tc = T.flatMap(a => corners(a).map(k => [a[2 * k], a[2 * k + 1]]));
+    tc.tc.forEach(([x, y]) => { // the typed letter's corners too: a notch drawn soft is still a notch the pull may deepen
+      let bd = 0.06 * 0.06, bj = -1, bk = -1;
+      st.forEach((a, j) => { for (let i = 0; i < a.length; i += 2) { const d = (a[i] - x) ** 2 + (a[i + 1] - y) ** 2; if (d < bd) { bd = d; bj = j; bk = i >> 1; } } });
+      if (bj >= 0 && !W.cn[bj].some(k => Math.abs(k - bk) <= 3)) W.cn[bj].push(bk);
+    });
+    const out = W.map((w, j) => w.map((q, k) => {
+      const x = st[j][2 * k], y = st[j][2 * k + 1]; let bd = 0.08 * 0.08, bw = -1;
+      T.forEach((a, m) => { for (let i = 0; i < a.length; i += 2) { const d = (a[i] - x) ** 2 + (a[i + 1] - y) ** 2; if (d < bd) { bd = d; bw = tw[m][i >> 1]; } } });
+      return bw < 0 ? q : (q + bw) / 2;
+    }));
+    out.cn = W.cn; return out;
+  }
+  const DRAG = new WeakMap(), TRW = new WeakMap();
+  const dragOf = (v, L) => { let c = DRAG.get(v); if (!c || c.L !== L) DRAG.set(v, c = { L, w: dragW(v.s, L) }); return c.w; };
+  // Keep a change broad where the hand drags: the move of each point is averaged over ±(0.03 + 0.1·w) of ink, so a long
+  // line bends or tilts as a whole but never dents; a dragged run then stays as straight as it was drawn. Curves keep it all.
+  function calm(out, src, W) {
+    return out.map((a, j) => {
+      const s = src[j], w = W[j], c = cumLen(s), n = c.length, o = a.slice();
+      if (n < 3 || a.length !== s.length) return a;
+      const sharp = W.cn ? W.cn[j] : corners(s);
+      for (let k = 1; k < n - 1; k++) {
+        const h = 0.03 + 0.1 * w[k]; let i = k, e = k, dx = a[2 * k] - s[2 * k], dy = a[2 * k + 1] - s[2 * k + 1];
+        while (i > 0 && e < n - 1 && c[k] - c[i - 1] <= h && c[e + 1] - c[k] <= h) { i--; e++; dx += a[2 * i] - s[2 * i] + a[2 * e] - s[2 * e]; dy += a[2 * i + 1] - s[2 * i + 1] + a[2 * e + 1] - s[2 * e + 1]; } // same reach both sides: a straight move stays exact
+        o[2 * k] = s[2 * k] + dx / (e - i + 1); o[2 * k + 1] = s[2 * k + 1] + dy / (e - i + 1);
+      }
+      for (let i = 0; i < n;) { // dragged runs: moved ends joined by the drawn line's own shape
+        if (w[i] <= 0.6) { i++; continue; }
+        let e = i; while (e + 1 < n && w[e + 1] > 0.6) e++;
+        if (e - i >= 3) for (let k = i + 1; k < e; k++) {
+          const t = (c[k] - c[i]) / (c[e] - c[i]), b = Math.min((w[k] - 0.6) / 0.3, 1);
+          const px = o[2 * i] + t * (o[2 * e] - o[2 * i]) + s[2 * k] - (s[2 * i] + t * (s[2 * e] - s[2 * i]));
+          const py = o[2 * i + 1] + t * (o[2 * e + 1] - o[2 * i + 1]) + s[2 * k + 1] - (s[2 * i + 1] + t * (s[2 * e + 1] - s[2 * i + 1]));
+          o[2 * k] += b * (px - o[2 * k]); o[2 * k + 1] += b * (py - o[2 * k + 1]);
+        }
+        i = e + 1;
+      }
+      for (const q of sharp) { // a notch or corner (ต's top) keeps its depth: its own move differs from the moves around it by ≤0.015
+        let i = q, e = q, mx = 0, my = 0;
+        while (i > 0 && e < n - 1 && c[q] - c[i - 1] <= 0.2 && c[e + 1] - c[q] <= 0.2) { i--; e++; }
+        for (let k = i; k <= e; k++) { mx += o[2 * k] - s[2 * k]; my += o[2 * k + 1] - s[2 * k + 1]; }
+        mx /= e - i + 1; my /= e - i + 1;
+        for (let k = i; k <= e; k++) {
+          const lx = o[2 * k] - s[2 * k] - mx, ly = o[2 * k + 1] - s[2 * k + 1] - my, l = Math.hypot(lx, ly);
+          const fade = Math.min(Math.max((0.08 - Math.abs(c[k] - c[q])) / 0.04, 0), 1); // full near the corner, none 0.08 away
+          if (l > 0.015 && fade > 0) { const f = fade * (1 - 0.015 / l); o[2 * k] -= f * lx; o[2 * k + 1] -= f * ly; }
+        }
+      }
+      return o;
+    });
+  }
   // Small loops (heads, knots): the stroke comes back within 0.04 of itself after 0.15-0.9 of ink, around real area (not a retrace).
   // [start, end, where it starts along the stroke 0..1]
   function loops(a) {
@@ -855,7 +956,9 @@
           if (i === 0 && cl.base) {
             const hang = fr.y1 > BASE + 0.15, plain = fr.y0 >= XH - 0.15 && !hang, e = hang ? a.y0 - b.y0 : a.y1 - b.y1;
             if (Math.abs(e) > 0.04) cInfo += ch + ' line ' + e.toFixed(2) + '; ';
-            if (plain && Math.abs((a.y1 - a.y0) / (b.y1 - b.y0) - 1) > 0.08) cInfo += ch + ' height ' + ((a.y1 - a.y0) / (b.y1 - b.y0)).toFixed(2) + '; ';
+            const fl = bodyTop(A[i].v) > bbox(A[i].v).y0 || bodyTop(B[i].v) > fr.y0, top = (p, q) => (fl ? bodyTop(p.v, true) + p.dy - pen(p.v) : q.y0); // a flick may be any length: compare bodies
+            const kh = (a.y1 - top(A[i], a)) / (b.y1 - top(B[i], b));
+            if (plain && Math.abs(kh - 1) > 0.08) cInfo += ch + ' height ' + kh.toFixed(2) + '; ';
           } else {
             const e = LOWER.has(ch) ? a.y0 - b.y0 : a.y1 - b.y1, k = dg(a) / dg(b); // the gap to the ink below is exact; height also carries a leaning letter's own top
             if (Math.abs(e) > 0.07) cInfo += (cl.base || '') + ch + ' place ' + e.toFixed(2) + '; ';
@@ -897,7 +1000,8 @@
     const row = copies('กกกกกกกก', 4).map(unit); let dmin = Infinity;
     for (let i = 0; i < row.length; i++) for (let j = i + 1; j < row.length; j++) dmin = Math.min(dmin, (near(row[i], row[j]) + near(row[j], row[i])) / 2);
     const hs8 = copies('กกกกกกกก', 4).map(st => { const b = bbox({ s: st }); return b.y1 - b.y0; }), hm8 = hs8.reduce((a, b) => a + b) / 8, hsd = Math.sqrt(hs8.reduce((a, h) => a + (h - hm8) ** 2, 0) / 8) / hm8;
-    t('no two copies alike', dmin > 0.012 && hsd > 0.008, 'closest pair differs ' + dmin.toFixed(3) + ' of its height; heights ±' + (hsd * 100).toFixed(1) + '%');
+    // v13: closest pair 0.012 -> 0.01, ก's long legs no longer dent (mean difference between copies unchanged)
+    t('no two copies alike', dmin > 0.01 && hsd > 0.008, 'closest pair differs ' + dmin.toFixed(3) + ' of its height; heights ±' + (hsd * 100).toFixed(1) + '%');
     const h40 = copies('ก'.repeat(40), 9).map(st => { const b = bbox({ s: st }); return b.y1 - b.y0; }), m40 = h40.reduce((a, b) => a + b) / 40;
     let c0 = 0, c1 = 0; for (let i = 0; i < 40; i++) { c0 += (h40[i] - m40) ** 2; if (i) c1 += (h40[i] - m40) * (h40[i - 1] - m40); }
     t('sizes drift letter to letter, not jump', c1 / c0 > 0.3, 'neighbour likeness ' + (c1 / c0).toFixed(2));
@@ -949,6 +1053,24 @@
     const [na1, nb1] = variantsFor({ g: { 'ก': [ka, kb] } }, 'ก', fb, MP), [, nd] = variantsFor({ g: { 'ก': [ka, kd] } }, 'ก', fb, MP);
     const mm = na1.s.length === nb1.s.length && match(na1, nb1), mid = mm && bbox(blend(mm, 0.5)), ba = bbox(na1), bb2 = bbox(nb1);
     t('close versions mix, different ones never', mm && mid.x1 > Math.min(ba.x1, bb2.x1) - 1e-3 && mid.x1 < Math.max(ba.x1, bb2.x1) + 1e-3 && !(nd.s.length === na1.s.length && match(na1, nd)), mm ? 'mixed right edge ' + mid.x1.toFixed(3) + ' between ' + ba.x1.toFixed(3) + ' and ' + bb2.x1.toFixed(3) : 'no match');
+    // v13: a flick over the body (ศ) may be drawn any length; the body keeps a plain letter's (ก) height
+    { const sv = mh.g['ศ'][0], y0 = bodyTop(sv, true), lng = { s: sv.s.map(a => a.map((q, i) => (i % 2 && q < y0 ? y0 - 3 * (y0 - q) : q))) };
+      const ns = variantsFor({ g: { 'ศ': [lng] } }, 'ศ', fb, MP)[0], nk = variantsFor(mh, 'ก', fb, MP)[0], r1 = (bbox(ns).y1 - bodyTop(ns, true)) / (bbox(nk).y1 - bbox(nk).y0);
+      t('a long flick never shrinks ศ', Math.abs(r1 - 1) < 0.05, 'ศ body ' + r1.toFixed(3) + ' of ก, flick ' + (bodyTop(ns, true) - bbox(ns).y0).toFixed(2)); }
+    // v13: long straight lines are dragged in one go: copies bend or tilt them, never dent them (curves keep their wobble)
+    { let worst = 0, runs = 0;
+      for (const ch of 'บตกม') {
+        const v = variantsFor(mh, ch, fb, MP)[0], Lk = typedLook(fb(ch), MP.sl || 0), W = dragOf(v, Lk);
+        for (let sd = 1; sd <= 25; sd++) {
+          const cp = vary(v, ch, rng(sd * 7), sd % 3 ? 0 : 0.8, Lk, refPick(v, ch), { hands: new Set(), neat: sd % 2 }).s;
+          v.s.forEach((a, j) => { const w = W[j], n = a.length / 2; if (!cp[j] || cp[j].length !== a.length) return;
+            for (let i = 0; i < n;) { if (w[i] < 0.9) { i++; continue; } let e = i; while (e + 1 < n && w[e + 1] >= 0.9) e++;
+              if (e - i >= 6) { const dev = p => { let m = 0; const ax = p[2 * i], ay = p[2 * i + 1], dx = p[2 * e] - ax, dy = p[2 * e + 1] - ay, L = Math.hypot(dx, dy) || 1; for (let k = i; k <= e; k++) m = Math.max(m, Math.abs((p[2 * k] - ax) * dy - (p[2 * k + 1] - ay) * dx) / L); return m; };
+                worst = Math.max(worst, dev(cp[j]) - dev(a)); runs++; }
+              i = e + 1; } });
+        }
+      }
+      t('dragged lines stay straight', runs > 20 && worst < 0.006, runs + ' long runs, worst extra bend ' + worst.toFixed(4)); }
     return r;
   }
 
