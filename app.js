@@ -116,10 +116,14 @@ function drawBox(i) {
   const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / k, 4 / k] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(H.BOX_W, y); x.stroke(); };
   hl(0.3, '#e5e7eb', 1); hl(H.XH, '#cbd5e1'); hl(H.BASE, '#94a3b8'); hl(2.5, '#e5e7eb', 1); x.setLineDash([]);
   if (H.needsGhost(c.ch)) { const g = fb('ก'); if (g) { x.fillStyle = '#d4d4d8'; fillPolys(x, g.p); } }
+  const ty = fb(c.ch); if (ty && ty.p) { x.fillStyle = 'rgba(37,99,235,0.1)'; fillPolys(x, ty.p); } // faint typed letter to compare with
   x.strokeStyle = '#1a1a1a'; x.lineWidth = 0.075; x.lineCap = x.lineJoin = 'round';
   const v = (hand.g[c.ch] || [])[ver];
   for (const a of v ? v.s : []) strokeLine(x, a);
-  if (drawing && drawing.i === i) strokeLine(x, drawing.pts);
+  if (drawing && drawing.i === i) { strokeLine(x, drawing.pts); return; }
+  const r = v ? H.checkLetter(hand, c.ch, ver, fb) : { ok: true }; // red only when the auto-fix can't make it match the typed letter
+  cells[i].wrap.classList.toggle('bad', !r.ok);
+  cells[i].lbl.textContent = label(c.ch) + (r.ok ? '' : ' · ' + { small: 'too small', big: 'too big', lean: 'too slanted' }[r.why]);
 }
 function attachPen(cv, i) {
   const pt = e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * H.BOX_W).toFixed(3), +((e.clientY - r.top) / r.height * H.BOX_H).toFixed(3)]; };
