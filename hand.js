@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 6; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 7; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -124,6 +124,21 @@
     }
     return { k: ks.length ? med(ks) : 0, sl: ss.length ? med(ss) : null };
   }
+  // Height of a tailed letter without its tail (up: tail rises above the body, else hangs below).
+  // Walking in from the tail end, the body starts at the first 0.04-tall row whose ink spans >= 60% of the letter's width.
+  function body(v, up) {
+    const b = bbox(v), h = b.y1 - b.y0, n = Math.ceil(h / 0.04), lo = new Array(n).fill(Infinity), hi = new Array(n).fill(-Infinity);
+    const put = (x, y) => { const r = Math.min(n - 1, Math.floor((y - b.y0) / 0.04)); lo[r] = Math.min(lo[r], x); hi[r] = Math.max(hi[r], x); };
+    for (const a of (v.s || v.p)) for (let i = 0; i < a.length; i += 2) {
+      const m = i ? Math.ceil(Math.hypot(a[i] - a[i - 2], a[i + 1] - a[i - 1]) / 0.02) : 1;
+      for (let t = 1; t <= m; t++) put(i ? a[i - 2] + (a[i] - a[i - 2]) * t / m : a[i], i ? a[i - 1] + (a[i + 1] - a[i - 1]) * t / m : a[i + 1]);
+    }
+    for (let k = 0; k < n; k++) {
+      const r = up ? k : n - 1 - k;
+      if (hi[r] - lo[r] >= 0.6 * (b.x1 - b.x0)) { const e = b.y0 + (up ? r : r + 1) * 0.04, d = up ? b.y1 - e : e - b.y0; return d > 0.3 * h ? d : null; }
+    }
+    return null;
+  }
   // Drawn letters float, lean and vary in size: smooth the pen, lean each like this person's usual slant,
   // then move it onto the line where the reference font puts that letter, at the reference size.
   const NORM = new WeakMap();
@@ -143,7 +158,10 @@
     let k = kh;
     // the clamps only guard against odd drawings (a flat mark, a giant tail)
     if (mark) k = Math.min(Math.max(Math.hypot(f.x1 - f.x0, f.y1 - f.y0) / Math.max(Math.hypot(u.x1 - u.x0, u.y1 - u.y0), 0.02), 0.6 * S), 1.6 * S);
-    else if (!plain) k = Math.min(Math.max(Math.sqrt(kh * kw), 0.65 * S), 1.35 * S); // width ignores how long the tail was drawn
+    else if (!plain) { // size by the letter's body only: its tail may be drawn any length
+      const up = f.y1 <= BASE + 0.15, bu = body(w, up), bf = body(ref, up);
+      k = Math.min(Math.max(bu && bf ? bf / bu : Math.sqrt(kh * kw), 0.65 * S), 1.35 * S);
+    }
     const topAlign = LOWER.has(ch) || (!mark && f.y1 > BASE + 0.15); // hang below-line letters from the top
     const ty = topAlign ? f.y0 - u.y0 * k : f.y1 - u.y1 * k, tx = mark ? f.x1 - u.x1 * k : GX - u.x0 * k;
     const out = { s: w.s.map(a => a.map((q, i) => +(i % 2 ? q * k + ty : q * k + tx).toFixed(4))) };
@@ -399,6 +417,15 @@
     const g2 = layout('กอ', mh, { x: 0, y: 0, width: 1e4, u: 1, seed: 4, fb }), na = mh.g['ก'][0].s.length;
     const vg = bbox({ s: g2.strokes.slice(na) }).x0 - bbox({ s: g2.strokes.slice(0, na) }).x1;
     t('letters keep a small visible gap', vg > 0.05 && vg < 0.25, vg.toFixed(2));
+    // tails drawn extra long or short: the body still gets ก's height
+    let tInfo = '';
+    for (const ch of 'ปฟญฎ') for (const st of [0.5, 2]) {
+      const f = fb(ch), b = bbox(f), up = ch === 'ป' || ch === 'ฟ', edge = up ? XH : BASE; // stretch only the tail
+      const v = { s: f.p.map(a => a.map((q, i) => i % 2 ? (up ? (q < edge ? edge - (edge - q) * st : q) : (q > edge ? edge + (q - edge) * st : q)) : q)) };
+      const n = variantsFor({ g: { 'ก': [{ s: fb('ก').p }], [ch]: [v] } }, ch, fb, { k: 1, sl: null })[0], bn = body(n, up), bf = body(f, up);
+      if (!bn || Math.abs(bn / bf - 1) > 0.06) tInfo += ch + ' tail×' + st + ' body ' + (bn ? (bn / bf).toFixed(2) : '?') + '; ';
+    }
+    t('tailed letters sized by body, not tail', !tInfo, tInfo);
     return r;
   }
 
