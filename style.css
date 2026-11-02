@@ -23,14 +23,14 @@ section { padding: 12px 16px; max-width: 1200px; margin: 0 auto; }
 #verRow { color: var(--muted); font-size: 13px; margin-top: 4px; }
 #verRow button { padding: 2px 10px; margin-left: 4px; font-size: 13px; }
 #verRow button.on { background: var(--acc); color: #fff; border-color: var(--acc); }
-#boxes { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 8px 0; }
-@media (max-width: 1000px) { #boxes { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-@media (max-width: 600px) { #boxes { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+#boxes { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 6px; margin: 8px 0; }
+@media (max-width: 1000px) { #boxes { grid-template-columns: repeat(8, minmax(0, 1fr)); } }
+@media (max-width: 600px) { #boxes { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .box { position: relative; }
 .box canvas { display: block; width: 100%; aspect-ratio: 16 / 26; background: #fff; border: 1px solid var(--line); border-radius: 10px; touch-action: none; -webkit-user-select: none; user-select: none; }
-.box .lbl { position: absolute; top: 4px; left: 8px; font-size: 22px; color: #475569; pointer-events: none; }
-.box .act { position: absolute; top: 4px; right: 4px; display: flex; gap: 4px; }
-.box .act button { padding: 2px 8px; font-size: 13px; background: #fff; color: #334155; }
+.box .lbl { position: absolute; top: 2px; left: 5px; font-size: 14px; color: #475569; pointer-events: none; }
+.box .act { display: flex; justify-content: center; gap: 3px; margin-top: 2px; }
+.box .act button { padding: 0 6px; font-size: 11px; line-height: 18px; border-radius: 6px; background: #fff; color: #334155; }
 .prog { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden; margin: 8px 0; }
 #progFill { height: 100%; background: var(--acc); width: 0; }
 .tools { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

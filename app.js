@@ -67,7 +67,7 @@ async function loadHandFile(file) {
 }
 
 // ---------- Teach screen: pages of 12 letters, one box each, for the chosen version (1-5)
-const PER = 12;
+const PER = 24;
 const CHARS = H.GROUPS.flatMap(([group, s], gi) => [...s].map(ch => ({ ch, group, gi })));
 const REQ = CHARS.filter(c => c.gi < H.REQUIRED_GROUPS);
 const PAGES = Math.ceil(CHARS.length / PER);
