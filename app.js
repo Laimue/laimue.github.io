@@ -389,7 +389,9 @@ async function runTests() { // open with ?test
   buildBoxes(); wire();
   try { const h = await db.get('hand'); if (h && h.g) hand = h; } catch { toast('This browser blocks saving — use ⋯ → Save my handwriting file.', 6000); }
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { }
+  const refs = fetch('refs.json').then(r => r.json()).then(H.setRefs).catch(e => console.warn('reference hands', e)); // without them letters still vary, just less
   try { font = opentype.parse(await (await fetch('lib/Sriracha-Regular.ttf')).arrayBuffer()); } catch (e) { console.warn('fallback font', e); }
+  await refs;
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (/[?&]test\b/.test(location.search)) return runTests();
   showTab(LS.get('tab', 'teach'));

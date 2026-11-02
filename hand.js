@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 10; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 11; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -78,11 +78,11 @@
   const vb = v => { const b = bbox(v), e = pen(v); return { x0: b.x0 - e, x1: b.x1 + e, y0: b.y0 - e, y1: b.y1 + e }; }; // full visible edge
 
   // Font glyph -> filled polygons in box units (fallback for letters not drawn yet).
-  function fontVariant(font, ch) {
+  function fontVariant(font, ch, k = K) { // k: box units per font unit (1 / that font's ก height)
     const g = font.charToGlyph(ch); if (!g || !g.index) return null;
     const ox = needsGhost(ch) ? GHOST.adv : GX;
     const polys = []; let cur = null, px = 0, py = 0;
-    const P = (x, y) => { cur.push(+(ox + x * K).toFixed(4), +(BASE + y * K).toFixed(4)); px = x; py = y; };
+    const P = (x, y) => { cur.push(+(ox + x * k).toFixed(4), +(BASE + y * k).toFixed(4)); px = x; py = y; };
     for (const c of g.getPath(0, 0, font.unitsPerEm).commands) {
       if (c.type === 'M') { cur = []; polys.push(cur); P(c.x, c.y); }
       else if (c.type === 'L') P(c.x, c.y);
@@ -90,7 +90,7 @@
       else if (c.type === 'C') { const x0 = px, y0 = py; for (let t = 1; t <= 8; t++) { const s = t / 8, a = 1 - s; P(a * a * a * x0 + 3 * a * a * s * c.x1 + 3 * a * s * s * c.x2 + s * s * s * c.x, a * a * a * y0 + 3 * a * a * s * c.y1 + 3 * a * s * s * c.y2 + s * s * s * c.y); } }
     }
     const p = polys.filter(q => q.length >= 6);
-    return p.length ? { p, adv: g.advanceWidth * K } : null;
+    return p.length ? { p, adv: g.advanceWidth * k } : null;
   }
 
   // Pencil shake: two light [1,2,1] passes per stroke, ends kept (points are >=0.012 apart, loops shrink ~2%).
@@ -320,14 +320,14 @@
   }
   // Move each point PULL of the way to the typed centre line; parts far from it (a flourish, a longer tail) fade out
   // of the pull. The move is averaged along the stroke so it bends smoothly instead of snapping between branches.
-  function pull(st, L) {
+  function pull(st, L, wf) { // wf(x, y): how far to pull there (default PULL)
     const Q = L.pts;
     return st.map(a => {
       const n = a.length / 2, mx = new Float64Array(n), my = new Float64Array(n);
       for (let k = 0; k < n; k++) {
         const x = a[2 * k], y = a[2 * k + 1]; let bd = Infinity, bx = x, by = y;
         for (let i = 0; i < Q.length; i += 2) { const d = (Q[i] - x) ** 2 + (Q[i + 1] - y) ** 2; if (d < bd) { bd = d; bx = Q[i]; by = Q[i + 1]; } }
-        const w = PULL * Math.min(Math.max((0.3 - Math.sqrt(bd)) / 0.15, 0), 1); mx[k] = w * (bx - x); my[k] = w * (by - y);
+        const w = (wf ? wf(x, y) : PULL) * Math.min(Math.max((0.3 - Math.sqrt(bd)) / 0.15, 0), 1); mx[k] = w * (bx - x); my[k] = w * (by - y);
       }
       return a.map((q, i) => {
         const k = i >> 1, k0 = Math.max(0, k - 5), k1 = Math.min(n - 1, k + 5); let t = 0;
@@ -467,11 +467,41 @@
   // corners when writing fast. Never past what still reads as the letter: a copy that strays from the typed letter
   // (as seen) more than the drawing itself is tried at half strength, then left as drawn.
   const DOWN = new Set('ฎฏฐญฤฦ'), SEEN0 = new WeakMap();
-  function vary(v, ch, R, fast, Lk) {
+  function vary(v, ch, R, fast, Lk, refs) {
     const src = v.s || v.p, u = () => R() * 2 - 1, many = src.length > 1;
     const t = Math.min(Math.max(0.3 + 0.5 * (R() + R() - 1) - 0.1 * fast, 0), 0.8); // pull toward typed: 0 = as drawn, today's look 0.3
-    const ky = 0.24 * u(), kx = 0.24 * u(), kt = 0.12 * u(), kl = 0.15 * u(), sh = src.map(() => [0.015 * u(), 0.015 * u()]);
+    const ky = 0.32 * u(), kx = 0.32 * u(), kt = 0.16 * u(), kl = 0.15 * u(), sh = src.map(() => [0.022 * u(), 0.022 * u()]);
     const up = TALL.has(ch), down = DOWN.has(ch), soft = fast > 0.6 ? 2 : fast > 0 ? 1 : 0;
+    const np = src.reduce((q, a) => q + a.length / 2, 0), at = () => { let k = (R() * np) | 0; for (const a of src) { if (k < a.length / 2) return [a[2 * k], a[2 * k + 1]]; k -= a.length / 2; } };
+    // a reference hand that looks like this person's, pulled toward only in 1-2 soft spots (person > typed > references)
+    let rf = null;
+    if (v.s && refs) {
+      let x = R() * refs.tot; const st = (refs.out.find(e => (x -= e[0]) <= 0) || refs.out[refs.out.length - 1])[1], spots = [];
+      for (let n = R() < 0.5 ? 1 : 2; n > 0; n--) spots.push([...at(), 0.35 + 0.25 * R(), Math.min(0.1 + 0.2 * R(), Math.max(0.8 - t, 0))]);
+      rf = { st, spots };
+    }
+    // parts of the letter change (each change on in about half the copies): loops and heads, corners, stroke ends, bulges
+    const ops = [];
+    if (v.s) {
+      const on = () => R() < 0.65, info = src.map(a => ({ lp: loops(a), cn: corners(a), c: cumLen(a) }));
+      if (on()) src.forEach((a, j) => info[j].lp.forEach(([i, k, f]) => {
+        const z = 0.75 + 0.55 * R(), open = f < 0.35 && fast > 0.6 && R() < 0.25 ? 0.02 + 0.03 * R() : 0; // fast writers open a head now and then; knots only change size
+        ops.push((S, g) => scaleLoop(S[j], i, k, 1 + g * (z - 1), g * open));
+      }));
+      if (on()) {
+        const m = Math.max(2, Math.round(Math.min(0.08, 0.03 + 0.03 * R() + 0.02 * Math.max(fast, 0)) / 0.016));
+        src.forEach((a, j) => info[j].cn.forEach(k => { if (R() < 0.5 && !info[j].lp.some(([i0, i1]) => k >= i0 - 3 && k <= i1 + 3)) ops.push((S, g) => roundAt(S[j], k, m, g)); }));
+      }
+      if (on()) src.forEach((a, j) => {
+        const c = info[j].c, T = c[c.length - 1]; if (T < 0.2) return;
+        const f = 0.1 + 0.1 * R(), z = 1 + 0.2 * u(), th = 0.17 * u(), e = c.findIndex(q => q >= (1 - f) * T);
+        ops.push((S, g) => endTurn(S[j], e, 1 + g * (z - 1), g * th));
+      });
+      if (on()) for (let n = R() < 0.5 ? 1 : 2; n > 0; n--) {
+        const [cx, cy] = at(), r = 0.2 + 0.2 * R(), A = (0.03 + 0.02 * R()) * (R() < 0.5 ? -1 : 1) * 2.33 / r; // 2.33: peak move = amplitude
+        ops.push((S, g) => S.forEach(a => { for (let i = 0; i < a.length; i += 2) { const dx = a[i] - cx, dy = a[i + 1] - cy, e = g * A * Math.exp(-(dx * dx + dy * dy) / (r * r)); a[i] += e * dx; a[i + 1] += e * dy; } }));
+      }
+    }
     const make = g => {
       const k = 1 + g * (t / PULL - 1);
       let s = src;
@@ -479,6 +509,12 @@
         s = v.s0.map((a, j) => a.map((q, i) => q + k * (v.s[j][i] - q)));
         const m = bbox({ p: s }), n = bbox(v), z = (n.y1 - n.y0) / Math.max(m.y1 - m.y0, 0.01);
         s = s.map(a => a.map((q, i) => (i % 2 ? n.y0 + (q - m.y0) * z : q)));
+      }
+      if (rf || ops.length) {
+        const b1 = bbox({ p: s });
+        s = rf ? refPull(s, rf.st, rf.spots.map(([x, y, r, pk]) => [x, y, r, g * pk])) : s.map(a => a.slice());
+        for (const f of ops) f(s, g);
+        if (!up && !down) { const m = bbox({ p: s }), z = (b1.y1 - b1.y0) / Math.max(m.y1 - m.y0, 0.01); s = s.map(a => a.map((q, i) => (i % 2 ? b1.y0 + (q - m.y0) * z : q))); } // shape changes, not size: same top and bottom
       }
       const b = bbox({ p: s });
       const w = Math.max(b.x1 - b.x0, 0.05), h = Math.max(b.y1 - b.y0, 0.05), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2;
@@ -500,8 +536,72 @@
     const wrap = s => (v.s ? { s } : { p: s });
     if (!Lk) return wrap(make(1));
     let b0 = SEEN0.get(v); if (b0 === undefined) SEEN0.set(v, b0 = seen(src, Lk));
-    for (const g of [1, 0.5]) { const s = make(g); if (seen(s, Lk) <= Math.max(LIKE, b0 + 0.01)) return wrap(s); }
+    for (const g of [1, 0.7, 0.4]) { const s = make(g); if (seen(s, Lk) <= Math.max(LIKE, b0 + 0.01)) return wrap(s); }
     return v;
+  }
+
+  // ---- Thai hand: parts of a letter (pen strokes, points ~0.016 apart) ----
+  const cumLen = a => { const c = [0]; for (let i = 2; i < a.length; i += 2) c.push(c[c.length - 1] + Math.hypot(a[i] - a[i - 2], a[i + 1] - a[i - 1])); return c; };
+  // Small loops (heads, knots): the stroke comes back within 0.04 of itself after 0.15-0.9 of ink, around real area (not a retrace).
+  // [start, end, where it starts along the stroke 0..1]
+  function loops(a) {
+    const c = cumLen(a), n = c.length, out = [];
+    for (let i = 0; i < n; i++) for (let j = i + 1; j < n && c[j] - c[i] <= 0.9; j++) {
+      const L = c[j] - c[i]; if (L < 0.15 || Math.hypot(a[2 * j] - a[2 * i], a[2 * j + 1] - a[2 * i + 1]) >= 0.04) continue;
+      let ar = a[2 * j] * a[2 * i + 1] - a[2 * i] * a[2 * j + 1];
+      for (let k = i; k < j; k++) ar += a[2 * k] * a[2 * k + 3] - a[2 * k + 2] * a[2 * k + 1];
+      if (Math.abs(ar) / 2 > 0.3 * L * L / (4 * Math.PI)) { out.push([i, j, c[i] / c[n - 1]]); i = j; break; } // ≥30% as round as a circle
+    }
+    return out;
+  }
+  function corners(a) { // sharpest point of each turn over 60° (directions taken ~0.05 each side)
+    const n = a.length / 2, w = 3, ang = new Float64Array(n), out = [];
+    for (let k = w; k < n - w; k++) {
+      const ux = a[2 * k] - a[2 * k - 2 * w], uy = a[2 * k + 1] - a[2 * k - 2 * w + 1], vx = a[2 * k + 2 * w] - a[2 * k], vy = a[2 * k + 2 * w + 1] - a[2 * k + 1];
+      ang[k] = Math.abs(Math.atan2(ux * vy - uy * vx, ux * vx + uy * vy));
+    }
+    for (let k = w; k < n - w; k++) if (ang[k] > Math.PI / 3 && ang[k] >= ang[k - 1] && ang[k] > ang[k + 1]) out.push(k);
+    return out;
+  }
+  function scaleLoop(a, i, j, z, open) { // loop grows/shrinks between its crossing points; open: its start lifts off the crossing
+    let cx = 0, cy = 0; for (let q = i; q <= j; q++) { cx += a[2 * q]; cy += a[2 * q + 1]; } cx /= j - i + 1; cy /= j - i + 1;
+    const dx = a[2 * i] - cx, dy = a[2 * i + 1] - cy, dl = Math.hypot(dx, dy) || 1, m = 0.4 * (j - i);
+    for (let q = 0; q <= j; q++) {
+      if (q >= i) { const w = Math.sin(Math.PI * (q - i) / (j - i)) * (z - 1); a[2 * q] += w * (a[2 * q] - cx); a[2 * q + 1] += w * (a[2 * q + 1] - cy); }
+      const o = open * (q <= i ? 1 : Math.max(0, 1 - (q - i) / m)); a[2 * q] += o * dx / dl; a[2 * q + 1] += o * dy / dl;
+    }
+  }
+  function roundAt(a, k, m, g) { // corner cut: points near k move toward the average of their neighbours
+    const a0 = a.slice(), n = a.length / 2;
+    for (let q = Math.max(1, k - m); q <= Math.min(n - 2, k + m); q++) {
+      let sx = 0, sy = 0, c = 0; for (let j = Math.max(0, q - m); j <= Math.min(n - 1, q + m); j++) { sx += a0[2 * j]; sy += a0[2 * j + 1]; c++; }
+      const w = g * Math.cos(Math.PI / 2 * (q - k) / (m + 1)) ** 2; a[2 * q] += w * (sx / c - a0[2 * q]); a[2 * q + 1] += w * (sy / c - a0[2 * q + 1]);
+    }
+  }
+  function endTurn(a, e, z, th) { // the end of a stroke runs longer or shorter and turns a little
+    const x0 = a[2 * e], y0 = a[2 * e + 1], c = Math.cos(th) * z, s = Math.sin(th) * z;
+    for (let q = 2 * e + 2; q < a.length; q += 2) { const dx = a[q] - x0, dy = a[q + 1] - y0; a[q] = x0 + c * dx - s * dy; a[q + 1] = y0 + s * dx + c * dy; }
+  }
+
+  // ---- Reference hands (refs.json: open fonts + averaged real handwriting), centre lines in box units ----
+  let REFS = null; const KW = { crowd: 3, hand: 3, looped: 2, loopless: 1 }, RW = new WeakMap();
+  function setRefs(j) { REFS = j && j.g && j.refs ? { j, w: j.refs.map(r => KW[r.kind] || 1), d: {} } : null; }
+  const unDelta = a => { const o = new Array(a.length); for (let i = 0; i < a.length; i++) o[i] = (i > 1 ? o[i - 2] : 0) + a[i] / 100; return o; }; // stored as 0.01 steps from the previous point
+  const refsOf = ch => !REFS ? [] : REFS.d[ch] || (REFS.d[ch] = (REFS.j.g[ch] || []).map(([i, st]) => [REFS.w[i], st.map(unDelta)]));
+  const fitBox = (st, b) => { const r = bbox({ s: st }), zx = (b.x1 - b.x0) / Math.max(r.x1 - r.x0, 0.05), zy = (b.y1 - b.y0) / Math.max(r.y1 - r.y0, 0.05); return st.map(a => a.map((q, i) => (i % 2 ? b.y0 + (q - r.y0) * zy : b.x0 + (q - r.x0) * zx))); };
+  const near = (A, B) => { let t = 0; for (let i = 0; i < A.length; i += 2) { let m = Infinity; for (let j = 0; j < B.length; j += 2) m = Math.min(m, (A[i] - B[j]) ** 2 + (A[i + 1] - B[j + 1]) ** 2); t += Math.sqrt(m); } return t / (A.length / 2); };
+  function refPick(v, ch) { // refs that look like this drawn letter: chance ∝ exp(-distance/0.05) × kind weight (null: none)
+    if (!REFS || !v || !v.s) return null; if (RW.has(v)) return RW.get(v);
+    const b = bbox(v), P = [], out = []; let tot = 0; ink(v, (x, y) => P.push(x, y), 0.04);
+    for (const [w, st] of refsOf(ch)) {
+      const Q = []; ink({ s: fitBox(st, b) }, (x, y) => Q.push(x, y), 0.04);
+      const e = w * Math.exp(-(near(P, Q) + near(Q, P)) / 2 / 0.05); if (e > 1e-4) { out.push([e, st]); tot += e; }
+    }
+    const c = out.length ? { tot, out } : null; RW.set(v, c); return c;
+  }
+  function refPull(s, st, spots) { // pull toward a reference letter (fitted to this copy's box) only inside soft spots [x, y, radius, peak]
+    const pts = []; for (const a of fitBox(st, bbox({ p: s }))) pts.push(...resample(a, 0.016));
+    return pull(s, { pts }, (x, y) => { let w = 0; for (const [cx, cy, r, pk] of spots) w = Math.max(w, pk * Math.exp(-((x - cx) ** 2 + (y - cy) ** 2) / (2 * r * r))); return w; });
   }
 
   // o: {x, y, width, u (page units per box unit), gap (line height in box units), seed, fb, thick, neat (0 natural .. 1 neat, default 1)}
@@ -522,7 +622,7 @@
       last[ch] = i; let v = vs[i];
       if (vs.length > 1 && v.s) { const w = vs[(i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length], m = w.s && match(v, w); if (m) v = blend(m, R()); } // somewhere between two of their versions
       const ref = o.fb && o.fb(ch);
-      return vary(v, ch, R, fastNow(), ref && ref.p ? typedLook(ref, P.sl || 0) : null);
+      return vary(v, ch, R, fastNow(), ref && ref.p ? typedLook(ref, P.sl || 0) : null, refPick(vs[i], ch));
     };
     const warp = () => ({ ax: J(0.03), ay: J(0.03), fx: 3 + R() * 4, fy: 3 + R() * 4, px: R() * 6.3, py: R() * 6.3 });
     const maxW = o.width / o.u, L = o.gap || 2.4, U = o.u;
@@ -560,12 +660,12 @@
     };
     for (const seg of words(text)) {
       if (seg === '\n') { newline(false); continue; }
-      const sh = J(0.06), wz = 1 + V(0.04), pw = [0.93, 1, 1.07][(R() * 3) | 0]; // each word: its own lean, a bit bigger or smaller, pen pressed softer or harder
+      const sh = J(0.06), wz = 1 + V(0.03), pw = [0.93, 1, 1.07][(R() * 3) | 0]; // each word: its own lean, a bit bigger or smaller, pen pressed softer or harder
       let prev = null;
       const items = parse(seg).map(cl => {
         if (cl.sp) { prev = null; return { sp: true, w: SPACE * (1 + V(0.3)) }; }
         step(); const f = fastNow();
-        const b = buildCluster(cl, pick), sc = wz * (1 + vr * (0.08 * cl2(W.sz) + 0.05 * u())), sw = 1 + vr * (0.16 * u() + 0.1 * f);
+        const b = buildCluster(cl, pick), sc = wz * (1 + vr * (0.06 * cl2(W.sz) + 0.0375 * u())), sw = 1 + vr * (0.16 * u() + 0.1 * f);
         const w = b.parts.length ? sc * sw * (b.x1 - b.x0) : 0.5, gx = vr * (0.04 * u() + 0.03 * f);
         const it = { ...b, sc, sw, sh: sh + vr * (0.06 * cl2(W.ln) + 0.04 * f), w, gap: 0.1 + J(0.03) + gx, th: J(0.035) + V(0.026), jy: J(0.02), warps: b.parts.map(warp), dk: 0,
           pw, tall: TALL.has(cl.base), mu: V(0.03), ml: V(0.03) };
@@ -672,7 +772,7 @@
       const [hsd, hm] = sd(hs); return { b: sd(bot)[0], h: hsd / hm };
     };
     const sn = spread(mh, 1), sx = spread(mh, 0);
-    t('neat: messy drawings come out even', sn.b < 0.03 && sn.h < 0.06, 'bottoms ±' + sn.b.toFixed(3) + ', heights ±' + (sn.h * 100).toFixed(1) + '%');
+    t('neat: messy drawings come out even', sn.b < 0.03 && sn.h < 0.045, 'bottoms ±' + sn.b.toFixed(3) + ', heights ±' + (sn.h * 100).toFixed(1) + '%');
     t('natural is looser than neat', sx.b > sn.b && sx.h > sn.h, 'natural bottoms ±' + sx.b.toFixed(3));
     // Three different people (right-leaning, upright, left-leaning): each keeps their own slant, all come out even.
     let pInfo = '', pOk = true;
@@ -683,7 +783,7 @@
         const s = slant(variantsFor(h, ch, fb, Q)[i]), sr = slant(fb(ch));
         if (slant(sm(v)) !== null && s !== null && sr !== null) worst = Math.max(worst, Math.abs(s - sr - Q.sl));
       });
-      const ok = Q.sl !== null && Math.abs(Q.sl - lean) < 0.08 && worst < 0.07 && e.b < 0.03 && e.h < 0.06;
+      const ok = Q.sl !== null && Math.abs(Q.sl - lean) < 0.08 && worst < 0.07 && e.b < 0.03 && e.h < 0.045;
       pOk = pOk && ok; pInfo += `lean ${lean}: usual ${(Q.sl || 0).toFixed(2)}, worst ${worst.toFixed(3)}${ok ? '' : ' ✗'}; `;
     }
     t('3 different people: each keeps their own slant, odd letters match it', pOk, pInfo);
@@ -757,11 +857,10 @@
     const one = { g: { ...mh.g, 'ก': [mh.g['ก'][0]] } }, n1 = one.g['ก'][0].s.length;
     const copies = (txt, seed) => { const L = layout(txt, one, { x: 0, y: 0, width: 1e4, u: 1, seed, fb, neat: 1 }), o = []; for (let i = 0; i < L.strokes.length; i += n1) o.push(L.strokes.slice(i, i + n1)); return o; };
     const unit = st => { const b = bbox({ s: st }), h = b.y1 - b.y0, o = []; ink({ s: st }, (x, y) => o.push((x - b.x0) / h, (y - b.y0) / h), 0.02); return o; };
-    const near = (A, B) => { let t = 0; for (let i = 0; i < A.length; i += 2) { let m = Infinity; for (let j = 0; j < B.length; j += 2) m = Math.min(m, (A[i] - B[j]) ** 2 + (A[i + 1] - B[j + 1]) ** 2); t += Math.sqrt(m); } return t / (A.length / 2); };
     const row = copies('กกกกกกกก', 4).map(unit); let dmin = Infinity;
     for (let i = 0; i < row.length; i++) for (let j = i + 1; j < row.length; j++) dmin = Math.min(dmin, (near(row[i], row[j]) + near(row[j], row[i])) / 2);
     const hs8 = copies('กกกกกกกก', 4).map(st => { const b = bbox({ s: st }); return b.y1 - b.y0; }), hm8 = hs8.reduce((a, b) => a + b) / 8, hsd = Math.sqrt(hs8.reduce((a, h) => a + (h - hm8) ** 2, 0) / 8) / hm8;
-    t('no two copies alike', dmin > 0.012 && hsd > 0.02, 'closest pair differs ' + dmin.toFixed(3) + ' of its height; heights ±' + (hsd * 100).toFixed(1) + '%');
+    t('no two copies alike', dmin > 0.012 && hsd > 0.008, 'closest pair differs ' + dmin.toFixed(3) + ' of its height; heights ±' + (hsd * 100).toFixed(1) + '%');
     const h40 = copies('ก'.repeat(40), 9).map(st => { const b = bbox({ s: st }); return b.y1 - b.y0; }), m40 = h40.reduce((a, b) => a + b) / 40;
     let c0 = 0, c1 = 0; for (let i = 0; i < 40; i++) { c0 += (h40[i] - m40) ** 2; if (i) c1 += (h40[i] - m40) * (h40[i - 1] - m40); }
     t('sizes drift letter to letter, not jump', c1 / c0 > 0.3, 'neighbour likeness ' + (c1 / c0).toFixed(2));
@@ -769,9 +868,31 @@
     let vBad = '', vBack = 0, vN = 0;
     for (const ch of GROUPS[0][1]) mh.g[ch].forEach((v0, i) => {
       const v = variantsFor(mh, ch, fb, MP)[i], Lk = typedLook(fb(ch), MP.sl || 0), lim = Math.max(LIKE, seen(v.s, Lk) + 0.01);
-      for (let sd = 1; sd <= 20; sd++) { const R = rng(sd * 97 + i), q = vary(v, ch, R, R() * 3 - 1.5, Lk); vN++; if (q === v) vBack++; else if (seen(q.s, Lk) > lim) vBad += ch + ' '; }
+      for (let sd = 1; sd <= 20; sd++) { const R = rng(sd * 97 + i), q = vary(v, ch, R, R() * 3 - 1.5, Lk, refPick(v, ch)); vN++; if (q === v) vBack++; else if (seen(q.s, Lk) > lim) vBad += ch + ' '; }
     });
-    t('every copy still reads as its letter', !vBad && vBack < 0.1 * vN, (100 * vBack / vN).toFixed(1) + '% left as drawn' + (vBad ? '; strays: ' + vBad.slice(0, 100) : ''));
+    t('every copy still reads as its letter', !vBad && vBack < 0.1 * vN, (100 * vBack / vN).toFixed(1) + '% left as drawn' + (vBad ? '; strays: ' + vBad.slice(0, 100) : '') + (REFS ? ', refs on' : ''));
+    // v11: sizes 25% calmer than v10 (v10: 200 copies of ก ±4.31%), loops found, references pull less than the typed letter
+    const h200 = copies('ก'.repeat(200), 9).map(st => { const b = bbox({ s: st }); return b.y1 - b.y0; }), m200 = h200.reduce((a, b) => a + b) / 200;
+    const sd200 = Math.sqrt(h200.reduce((a, h) => a + (h - m200) ** 2, 0) / 200) / m200;
+    t('sizes calmer than v10', sd200 <= 0.78 * 0.0431, 'heights ±' + (sd200 * 100).toFixed(2) + '% (v10 ±4.31%)');
+    // (the test people write the font's centre lines, whose heads are solid dots, so loops are drawn here by hand)
+    const line = [], back = [], ring = (a, x, y) => { for (let i = 0; i <= 28; i++) a.push(x + 0.07 * Math.sin(i * 0.23), y + 0.07 * Math.cos(i * 0.23)); };
+    for (let i = 0; i <= 60; i++) { line.push(0.3 + i * 0.01, 1 + i * 0.016); back.push(0.5, 1 + (i < 30 ? i : 60 - i) * 0.01 + (i < 30 ? 0 : 0.002)); }
+    const head = []; ring(head, 0.4, 1.8); for (let i = 1; i <= 60; i++) head.push(0.4 + i * 0.012, 1.87 - i * 0.012);
+    const knot = []; for (let i = 0; i <= 90; i++) knot.push(-0.04 + i * 0.008, 1.2); ring(knot, 0.68, 1.13); for (let i = 1; i <= 40; i++) knot.push(0.68 + i * 0.012, 1.2);
+    const lh = loops(head), lk = loops(knot);
+    t('loop finder: a head, a knot, none in a line or a retrace', lh.length === 1 && lh[0][2] < 0.35 && lk.length === 1 && lk[0][2] >= 0.35 && !loops(line).length && !loops(back).length,
+      'head ' + JSON.stringify(lh.map(l => l[2].toFixed(2))) + ', knot ' + JSON.stringify(lk.map(l => l[2].toFixed(2))) + ', line ' + loops(line).length + ', retrace ' + loops(back).length);
+    if (!REFS) t('reference hands loaded', false, 'no refs.json');
+    else {
+      const chars = GROUPS.filter((_, i) => i !== 5 && i !== 7).map(g => g[1]).join(''), few = [...chars].filter(ch => refsOf(ch).length < 20);
+      t('reference hands loaded', REFS.j.refs.length >= 40 && !few.length, REFS.j.refs.length + ' refs' + (few.length ? '; under 20: ' + few.join('') : ''));
+      let dr = 0, dt = 0;
+      for (const ch of 'กดบมสอ') { const v = variantsFor(mh, ch, fb, MP)[0], rk = refPick(v, ch); if (!rk) continue;
+        for (let sd = 1; sd <= 10; sd++) { const R = rng(sd), st = rk.out[(R() * rk.out.length) | 0][1], spots = [[...v.s[0].slice(0, 2), 0.35 + 0.25 * R(), 0.1 + 0.2 * R()]];
+          const q = refPull(v.s, st, spots); v.s.forEach((a, j) => a.forEach((x, i) => { dr += Math.abs(q[j][i] - x); dt += Math.abs(v.s0[j][i] - x); })); } }
+      t('references pull less than the typed letter', dr > 0 && dr < dt, 'moves ' + (dt ? (dr / dt).toFixed(2) : '?') + ' of the typed pull');
+    }
     // two close versions of a letter mix; two different ones never do
     const ka = mh.g['ก'][0], kb = { s: ka.s.map(a => a.map((q, i) => (i % 2 ? q : q + 0.6 * (q - 0.5) * 0.15))) }, kd = mh.g['ด'][0];
     const [na1, nb1] = variantsFor({ g: { 'ก': [ka, kb] } }, 'ก', fb, MP), [, nd] = variantsFor({ g: { 'ก': [ka, kd] } }, 'ก', fb, MP);
@@ -780,6 +901,6 @@
     return r;
   }
 
-  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest };
+  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest, setRefs, _look: typedLook, _trace: trace };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.Hand = API;
 })(this);
