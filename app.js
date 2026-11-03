@@ -67,7 +67,11 @@ function validSents(list) { // trust boundary too: the sentences part of a picke
   if (!Array.isArray(list)) return [];
   return list.filter(r => r && Array.isArray(r.lines) && r.lines.length >= 1 && r.lines.length <= 3 && r.lines.every(l => typeof l === 'string' && l.length <= 200)
     && Array.isArray(r.s) && r.s.length && r.s.length <= 3000 && r.s.every(okStroke) && Number.isFinite(r.w) && r.w > 0 && r.w < 100)
-    .map(r => ({ id: String(r.id || Math.random().toString(36).slice(2)).slice(0, 40), t: Number.isFinite(r.t) ? r.t : 0, lines: r.lines, s: r.s, w: r.w }));
+    .map(r => ({ id: String(r.id || Math.random().toString(36).slice(2)).slice(0, 40), t: Number.isFinite(r.t) ? r.t : 0, lines: r.lines, s: r.s, w: r.w, boxes: okBoxes(r.boxes, r.lines.length) }));
+}
+function okBoxes(b, rows) { // word boxes of a page (v25+); anything odd: none (the cutter then reads the whole row)
+  return Array.isArray(b) && b.length <= 80 && b.every(q => q && Number.isInteger(q.r) && q.r >= 0 && q.r < rows && Number.isFinite(q.x0) && Number.isFinite(q.x1) && q.x0 < q.x1 && q.x1 < 100
+    && typeof q.t === 'string' && q.t.length <= 80 && Number.isInteger(q.i) && q.i >= 0) ? b.map(({ r, x0, x1, t, i }) => ({ r, x0, x1, t, i })) : undefined;
 }
 async function saveFile(blob, name) {
   const file = new File([blob], name, { type: blob.type });
@@ -272,15 +276,15 @@ function have() { // samples of each letter so far: taught versions + letters cu
   for (const r of sents) for (const c of r.lines.join('')) n[c] = (n[c] || 0) + 0.3;
   return n;
 }
-async function newPage() {
+async function newPage(anim) { // one sentence per page (1-2 lines), a dashed box per word; anim: the card swaps like a letter
   let b; try { b = await loadBank(); } catch { return toast('Could not load the sentences. Check the internet once, then try again.'); }
-  const p = H.pickLines(b, have(), new Set(sents.flatMap(r => r.lines)));
+  const p = H.pickLines(b, have(), new Set(sents.flatMap(r => [...r.lines, r.lines.join('').replace(/ /g, '')])), Math.random, 2, 1);
   if (!p.lines.length) return toast('You have written every sentence!');
-  spage = { lines: p.lines, w: +Math.max(11, 0.95 * Math.max(...p.lines.map(l => H.parse(l).length))).toFixed(2) }; // ~1.5x the typed line
-  LS.set('spage', spage); sink = []; renderSent();
+  const wb = H.wordBoxes(p.lines, fb, 12), go = () => { spage = { lines: wb.lines, w: Math.max(8, wb.w), boxes: wb.boxes }; LS.set('spage', spage); sink = []; renderSent(); }; // rows ≤12 wide: bigger writing
+  if (anim) M.swap([$('#sentText'), spadCv()], 1, go); else go();
 }
 function renderSent() {
-  if (!spage) return newPage();
+  if (!spage || !spage.boxes) return newPage();
   const ol = $('#sentText'); ol.textContent = '';
   for (const l of spage.lines) { const li = document.createElement('li'); li.textContent = l; ol.append(li); }
   sizeSpad();
@@ -298,6 +302,8 @@ function drawSpad() {
   x.lineWidth = 1 / spadU;
   const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / spadU, 4 / spadU] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(spage.w, y); x.stroke(); };
   for (let r = 0; r < rows; r++) { const y = r * ROW; hl(y + 0.3, '#e7e5df', 1); hl(y + H.XH, '#d3d0c8'); hl(y + H.BASE, '#a29e94'); hl(y + 2.5, '#e7e5df', 1); } // the Letters pad's lines, per row
+  x.strokeStyle = 'rgba(255,77,23,0.45)'; x.setLineDash([6 / spadU, 5 / spadU]); x.lineWidth = 1.5 / spadU;
+  for (const q of spage.boxes) { x.beginPath(); x.roundRect ? x.roundRect(q.x0, q.r * ROW + 0.12, q.x1 - q.x0, ROW - 0.24, 0.12) : x.rect(q.x0, q.r * ROW + 0.12, q.x1 - q.x0, ROW - 0.24); x.stroke(); } // write each word in its box
   x.setLineDash([]); x.strokeStyle = '#141414'; x.lineWidth = 0.075; x.lineCap = x.lineJoin = 'round';
   for (const a of sink) strokeLine(x, a);
   if (drawing) strokeLine(x, drawing.pts);
@@ -329,11 +335,11 @@ function buildSent() {
   document.querySelectorAll('#teachMode button').forEach(b => (b.onclick = () => b.dataset.m !== tmode && setMode(b.dataset.m)));
   $('#sUndo').onclick = () => { sink.pop(); drawSpad(); };
   $('#sClear').onclick = () => { sink = []; drawSpad(); };
-  $('#sSkip').onclick = () => { if (!sink.length || confirm('Throw away what you wrote here and get other lines?')) newPage(); };
+  $('#sSkip').onclick = () => { if (!sink.length || confirm('Throw away what you wrote here and get another sentence?')) newPage(true); };
   $('#sNext').onclick = () => {
     if (!sink.length) return toast('Copy the lines on the pad first.');
-    sents.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), lines: spage.lines, s: sink, w: spage.w });
-    saveSents(); renderSentList(); toast(`Saved. ${sents.length} written so far.`, 2000); newPage(); cutAll();
+    sents.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), lines: spage.lines, s: sink, w: spage.w, boxes: spage.boxes });
+    saveSents(); renderSentList(); toast(`Saved. ${sents.length} written so far.`, 2000); newPage(true); cutAll();
   };
 }
 

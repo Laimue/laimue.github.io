@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 24; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 25; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -1241,7 +1241,7 @@
   // ---- Sentences: cut a written page into letters (the text is known) and keep only the ones it is sure of ----
   // rec = {lines, s: strokes over the whole pad, rows BOX_H apart, box units}. Unsure letters are skipped: a bad cut
   // must never reach the library, a missed one costs nothing.
-  const CUTV = 1, SURE = 0.05; // centre-line distance (cdist): own versions of the same letter ~0.02-0.04, look-alikes 0.05+
+  const CUTV = 2, SURE = 0.07; // centre-line distance (cdist): real sentence ink vs the same person's taught letter 0.02-0.07 (fakes 0.02-0.04), look-alikes further
   const CUT_BASES = [...(GROUPS[0][1] + GROUPS[1][1] + GROUPS[2][1] + 'ฃฅฦ')].filter(c => !isMark(c)), CUT_UP = [...UPPER, ...TOP], CUT_LO = [...LOWER];
   const ILOOK = new WeakMap();
   function inkLook(v) { // a drawn letter seen the way typedLook sees a font letter: distance to its visible ink, its ink cells
@@ -1290,17 +1290,26 @@
     return (a[ch] = pool.filter(c => c !== ch && fb(c) && fb(c).p).map(c => [c, fitTo(st, typedLook(fb(c), 0), tbox(fb(c)), mark, true)]).sort((p, q) => p[1] - q[1]).slice(0, 6).map(p => p[0]));
   }
   // sure: close to its letter, and clearly closer to it than to any look-alike
-  function sure(st, ch, hand, fb, P) {
-    const d = like(st, ch, hand, fb, P); if (!(d <= SURE)) return null;
-    for (const c of alts(ch, fb)) if (like(st, c, hand, fb, P, 1) < Math.max(d + 0.015, 1.4 * d)) return null;
-    return d;
+  function sure(st, ch, hand, fb, P) { // [distance to its letter, sure?]
+    const d = like(st, ch, hand, fb, P); if (!(d <= SURE)) return [d, false];
+    for (const c of alts(ch, fb)) if (like(st, c, hand, fb, P, 1) < Math.max(d + 0.02, 1.4 * d)) return [d, false];
+    return [d, true];
   }
   const sbox = sts => { const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }; for (const a of sts) { const q = bbox({ s: [a] }); b.x0 = Math.min(b.x0, q.x0); b.x1 = Math.max(b.x1, q.x1); b.y0 = Math.min(b.y0, q.y0); b.y1 = Math.max(b.y1, q.y1); } return b; };
   function cutRow(rec, r, hand, fb, info = {}) { // info: filled with what happened (tests, tuning)
-    const text = rec.lines[r], out = []; if (!text) return out;
+    const text = rec.lines[r]; if (!text) return [];
     const P = person(hand, fb), last = rec.lines.length - 1, y0 = r * BOX_H;
     const sts = rec.s.filter(a => { const b = bbox({ s: [a] }); return Math.min(Math.max(Math.floor((b.y0 + b.y1) / 2 / BOX_H), 0), last) === r; }).map(a => a.map((q, i) => (i % 2 ? q - y0 : q)));
-    const up = [], lo = [], atoms = [];
+    const bx = (rec.boxes || []).filter(b => b.r === r);
+    if (!bx.length) return cutText(text, sts, hand, fb, P, info).map(p => ({ ...p, r })); // a page from before word boxes
+    // word boxes: each stroke belongs to the box its middle is in (or the nearest), each word is cut on its own
+    const parts = bx.map(() => []);
+    for (const a of sts) { const b = bbox({ s: [a] }), cx = (b.x0 + b.x1) / 2; let k = 0, bd = Infinity; bx.forEach((q, j) => { const d = cx < q.x0 ? q.x0 - cx : cx > q.x1 ? cx - q.x1 : 0; if (d < bd) { bd = d; k = j; } }); parts[k].push(a); }
+    info.words = [];
+    return bx.flatMap((q, j) => { const inf = { t: q.t }, off = parse(text.slice(0, q.i)).length; info.words.push(inf); return cutText(q.t, parts[j], hand, fb, P, inf).map(p => ({ ...p, r, ci: p.ci + off })); });
+  }
+  function cutText(text, sts, hand, fb, P, info) { // strokes of one row (or one word box) that should read this text
+    const out = [], up = [], lo = [], atoms = [];
     for (const a of sts.map(a => [a, bbox({ s: [a] })]).sort((p, q) => p[1].x0 - q[1].x0)) {
       const [s, b] = a;
       if (b.y1 <= XH + 0.12) { up.push({ s: [s], b }); continue; }
@@ -1351,44 +1360,69 @@
       const upHere = items[j + 1] && items[j + 1].ch === AM && items[j + 1].ci === it.ci ? [] : ups[j]; // ำ's ring and tone: not cut
       if (!um.length && upHere.length && TALL.has(it.ch)) st = st.concat(...upHere.map(a => a.s)); // a tail drawn on its own
       if (!lm.length && los[j].length && DOWN.has(it.ch)) st = st.concat(...los[j].map(a => a.s));
-      const d = sure(st, it.ch, hand, fb, P);
-      pieces.push({ ch: it.ch, s: st, d, ci: it.ci });
+      const [d, ok] = sure(st, it.ch, hand, fb, P), gx0 = Math.min(...grp[j].map(q => q.b.x0)), gx1 = Math.max(...grp[j].map(q => q.b.x1));
+      const crowd = atoms.some(q => !grp[j].includes(q) && Math.min(gx1, q.b.x1) - Math.max(gx0, q.b.x0) > 0.25 * (gx1 - gx0)); // other ink runs into it: part of it may have gone there
+      pieces.push({ ch: it.ch, s: st, d: ok && !crowd ? d : null, raw: d, ci: it.ci });
       const vb0 = grow(sbox(st), HW);
       const marks = (list, atomsM) => { // marks of this letter, bottom first (vowel under tone); 1-2 strokes each
         if (!list.length || !atomsM.length || atomsM.length > list.length * 2) return;
-        const A = atomsM.slice().sort((p, q) => (list === lm ? 1 : -1) * ((p.b.y0 + p.b.y1) - (q.b.y0 + q.b.y1)));
+        const A0 = atomsM.slice().sort((p, q) => (list === lm ? 1 : -1) * ((p.b.y0 + p.b.y1) - (q.b.y0 + q.b.y1)));
         let best = null;
-        const tryCut = (k, at, acc) => {
+        const tryCut = (A, k, at, acc) => {
           if (k === list.length) { if (at === A.length) { const c = acc.reduce((t, q) => t + q.e, 0); if (!best || c < best.c) best = { c, acc }; } return; }
-          for (let z = 1; z <= 2 && at + z <= A.length; z++) { const s2 = A.slice(at, at + z).flatMap(a => a.s); tryCut(k + 1, at + z, [...acc, { ch: list[k], s: s2, e: like(s2, list[k], hand, fb, P, 1) }]); }
+          for (let z = 1; z <= 2 && at + z <= A.length; z++) { const s2 = A.slice(at, at + z).flatMap(a => a.s); tryCut(A, k + 1, at + z, [...acc, { ch: list[k], s: s2, e: like(s2, list[k], hand, fb, P, 1) }]); }
         };
-        tryCut(0, 0, []);
-        if (best) for (const q of best.acc) pieces.push({ ch: q.ch, s: q.s, d: sure(q.s, q.ch, hand, fb, P), ci: it.ci, dx: GHOST.r - vb0.x1 }); // marks are kept beside a ghost ก, like the Letters pad
+        for (const A of list.length === 2 ? [A0, A0.slice().reverse()] : [A0]) tryCut(A, 0, 0, []); // a tall tone tick can sit lower than the vowel it is over
+        if (best) for (const q of best.acc) { const [d, ok] = sure(q.s, q.ch, hand, fb, P); pieces.push({ ch: q.ch, s: q.s, d: ok ? d : null, raw: d, ci: it.ci, dx: GHOST.r - vb0.x1 }); } // marks are kept beside a ghost ก, like the Letters pad
       };
       marks(um, upHere); marks(lm, DOWN.has(it.ch) ? [] : los[j]);
     });
-    info.d = pieces.map(p => p.ch + (p.d === null ? '?' : '')).join('');
-    if (pieces.filter(p => p.d !== null).length < 0.5 * pieces.length) return out; // mostly unsure: something odd about this row
+    info.d = pieces.map(p => p.ch + (p.d === null ? '?' : '')).join(''); info.pc = pieces;
+    if (pieces.filter(p => p.raw <= 2 * SURE).length < 0.5 * pieces.length) return out; // most of it doesn't even look like the text: another text
     for (const p of pieces) if (p.d !== null) {
       const b = sbox(p.s), dx = p.dx != null ? p.dx : GX + HW - b.x0;
-      out.push({ ch: p.ch, s: p.s.map(a => a.map((v, i) => +(i % 2 ? v : v + dx).toFixed(3))), d: +p.d.toFixed(4), r, ci: p.ci, b: [b.x0, b.y0, b.x1, b.y1].map(q => +q.toFixed(3)) }); // b: where it was on the row (row units)
+      out.push({ ch: p.ch, s: p.s.map(a => a.map((v, i) => +(i % 2 ? v : v + dx).toFixed(3))), d: +p.d.toFixed(4), ci: p.ci, b: [b.x0, b.y0, b.x1, b.y1].map(q => +q.toFixed(3)) }); // b: where it was on the row (row units)
     }
     return out;
   }
   const cut = (rec, hand, fb) => ({ v: CUTV, p: rec.lines.flatMap((_, r) => cutRow(rec, r, hand, fb)) });
+
+  // The pad's dashed box per word: 1.3x the typed word (+0.25), room for the hand but it stays in it; tells the cutter where
+  // words are. maxW: words flow into rows at most that wide (up to 3 rows), else each line is a row. -> {lines (row texts), boxes, w}
+  const SEG = typeof Intl !== 'undefined' && Intl.Segmenter ? new Intl.Segmenter('th', { granularity: 'word' }) : null;
+  function wordBoxes(lines, fb, maxW = Infinity) {
+    const words = [];
+    lines.forEach((line, li) => { for (const sg of SEG ? SEG.segment(line) : line.split(/( +)/).map(s => ({ segment: s }))) {
+      const t = sg.segment; if (!t.trim()) { if (words.length) words[words.length - 1].sp = true; continue; }
+      const cb = layout(t, null, { x: 0, y: 0, width: 1e4, u: 1, seed: 1, fb }).cb.filter(Boolean);
+      const tw = cb.length ? Math.max(...cb.map(b => b[2])) - Math.min(...cb.map(b => b[0])) : 0.6 * parse(t).length;
+      words.push({ t, li, bw: Math.max(0.9, 1.3 * tw + 0.25) });
+    } });
+    const tot = words.reduce((s, q) => s + q.bw + 0.25, 0.25), mw = maxW === Infinity ? Infinity : Math.max(maxW, tot / 3);
+    const out = [''], boxes = []; let x = 0.25, w = 0;
+    words.forEach((q, k) => {
+      const nl = k && (maxW === Infinity ? q.li !== words[k - 1].li : x + q.bw > mw);
+      if (nl) { out.push(''); x = 0.25; }
+      const r = out.length - 1; if (out[r] && words[k - 1].sp && !nl) out[r] += ' ';
+      boxes.push({ r, x0: +x.toFixed(2), x1: +(x + q.bw).toFixed(2), t: q.t, i: out[r].length }); out[r] += q.t; x += q.bw + 0.25; w = Math.max(w, x);
+    });
+    return { lines: out, boxes, w: +w.toFixed(2) };
+  }
 
   // Test helper: a fake person copies the lines onto the pad with known habits. o: {seed, messy, gap, slope, mdy (marks
   // higher < 0), join / scribble: [[row, cluster]] (that base runs into the next one in one stroke / is a zigzag), other: row
   // written with another text, swap: [[row, cluster, letter]] a slip of the pen: another letter written there}. Returns a pad record plus truth: [{r, ci, ch, b}] where each letter really is.
   function fakeSentence(fb, lines, o = {}) {
     const fh = fakeHand(fb, o.seed || 1, !!o.messy), R = rng((o.seed || 1) * 13 + 5), s = [], truth = [], has = (l, r, ci) => (l || []).some(([a, b]) => a === r && b === ci);
+    const wb = o.noBoxes ? null : wordBoxes(lines, fb); // like the pad: each word starts inside its box
     lines.forEach((line, r) => {
-      let x = 0.4, k = 0; const cls = parse(o.other === r ? 'สวัสดีตอนเช้าทุกคน' : line), of = new Map();
+      let x = 0.4, k = 0, at = 0; const cls = parse(o.other === r ? 'สวัสดีตอนเช้าทุกคน' : line), of = new Map();
       let sw = null;
       const pick = c0 => { const ch = sw && c0 === sw[0] ? sw[1] : c0, vs = fh.g[ch] || [], v = vs.length ? vs[(R() * vs.length) | 0] : (fb(ch) && fb(ch).p ? { s: trace(typedLook(fb(ch), 0)) } : null); if (v) of.set(v, ch); return v; };
       let prev = null;
       cls.forEach(cl => {
-        const ci = k++;
+        const ci = k++, box = wb && o.other !== r && wb.boxes.find(q => q.r === r && q.i === at); at += cl.sp ? 1 : (cl.base ? 1 : 0) + cl.marks.length + (cl.am ? 1 : 0);
+        if (box) { x = box.x0 + 0.12 + 0.1 * R(); prev = null; }
         if (cl.sp) { x += 0.45; prev = null; return; }
         const w = (o.swap || []).find(([a, b]) => a === r && b === ci); sw = w ? [cl.base, w[2]] : null;
         const b = buildCluster(cl, pick); if (!b.parts.length) return;
@@ -1407,20 +1441,20 @@
         x += b.x1 - b.x0 + 0.1 + (o.gap || 0);
       });
     });
-    return { lines, s, w: 20, truth };
+    return { lines, s, w: wb ? wb.w : 20, boxes: wb ? wb.boxes : undefined, truth };
   }
 
   // Sentences tab: the lines to copy next. bank = [[line, line?], ...] (one sentence each), have = {ch: samples so far},
-  // written = Set of lines already written. Fills `rows` pad rows with the sentences that bring the
+  // written = Set of lines (or whole sentences, spaces removed) already written. Fills `rows` pad rows with the sentences that bring the
   // most of the letters this person has fewest samples of (score per row), from a random 300 of the bank.
-  function pickLines(bank, have, written, R = Math.random, rows = 3) {
+  function pickLines(bank, have, written, R = Math.random, rows = 3, items = Infinity) { // items: at most this many sentences
     const got = { ...have }, lines = [], ids = [];
     const score = it => { let t = 0; for (const c of new Set(it.join(''))) if (c !== ' ') t += 1 / (1 + (got[c] || 0)) ** 2; return t / it.length; };
-    while (lines.length < rows) {
+    while (lines.length < rows && ids.length < items) {
       let best = -1, bs = -1;
       for (let k = 0; k < 300; k++) {
         const i = (R() * bank.length) | 0, it = bank[i];
-        if (ids.includes(i) || it.length > rows - lines.length || written.has(it[0])) continue;
+        if (ids.includes(i) || it.length > rows - lines.length || written.has(it[0]) || written.has(it.join('').replace(/ /g, ''))) continue;
         const s = score(it); if (s > bs) { bs = s; best = i; }
       }
       if (best < 0) break;
@@ -1715,6 +1749,6 @@
     return r;
   }
 
-  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest, setRefs, synth, rich, mathParse, pickLines, cut, cutRow, CUTV, fakeSentence, _dbgLike: (st, ch, hand, fb) => like(st, ch, hand, fb, person(hand, fb)), _dbgAlts: (ch, fb) => alts(ch, fb), _look: typedLook, _trace: trace };
+  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest, setRefs, synth, rich, mathParse, pickLines, wordBoxes, cut, cutRow, CUTV, fakeSentence, _dbgLike: (st, ch, hand, fb) => like(st, ch, hand, fb, person(hand, fb)), _dbgAlts: (ch, fb) => alts(ch, fb), _look: typedLook, _trace: trace };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.Hand = API;
 })(this);
