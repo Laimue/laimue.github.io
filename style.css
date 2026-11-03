@@ -160,7 +160,7 @@ input[type=range] { width: 120px; accent-color: var(--orange); height: 44px; }
 .tpane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
 /* Sentences: model lines above, a wide pad of 2-3 ruled rows (sized in app.js), list of what was written */
 .s-hint { margin: 0; text-align: center; color: var(--muted); }
-#sentText { margin: 0 auto; padding: 0 0 0 2.2em; max-width: 100%; font-size: clamp(20px, 2.6vw, 30px); line-height: 1.45; color: var(--ink); }
+#sentText { margin: 0 auto; padding: 0; list-style: none; text-align: center; max-width: 100%; font-size: clamp(20px, 2.6vw, 30px); line-height: 1.45; color: var(--ink); }
 #sentText li::marker { font: 13px var(--mono); color: var(--muted); }
 .sstage { flex: 1; min-height: 160px; position: relative; }
 #spadWrap { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }

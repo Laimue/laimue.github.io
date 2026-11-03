@@ -265,7 +265,7 @@ function progress() {
   }
 }
 
-// ---------- Sentences: copy 2-3 real Thai lines on a ruled pad (rows BOX_H apart, in box units). Each written page is a
+// ---------- Sentences: copy one real Thai sentence on one ruled line (BOX_H high, in box units). Each written page is a
 // record {id, t, lines, s: strokes over the whole pad, w: pad width} that teaches the engine.
 let bank = null, spage = LS.get('spage', null), sink = [], spadU = 0, tmode = LS.get('tmode', 'letters');
 const ROW = H.BOX_H, spadCv = () => $('#spad');
@@ -276,22 +276,24 @@ function have() { // samples of each letter so far: taught versions + letters cu
   for (const r of sents) for (const c of r.lines.join('')) n[c] = (n[c] || 0) + 0.3;
   return n;
 }
-async function newPage(anim) { // one sentence per page (1-2 lines), a dashed box per word; anim: the card swaps like a letter
+async function newPage(anim) { // one one-line sentence per page on one ruled line (no word boxes: the cutter reads the whole row); anim: the card swaps like a letter
   let b; try { b = await loadBank(); } catch { return toast('Could not load the sentences. Check the internet once, then try again.'); }
-  const p = H.pickLines(b, have(), new Set(sents.flatMap(r => [...r.lines, r.lines.join('').replace(/ /g, '')])), Math.random, 2, 1);
+  const one = b.filter(i => i.length === 1 && i[0].replace(/[ัิ-ฺ็-๎ ]/g, '').length <= 14); // ≤14 letters: a line short enough for handwriting size on an iPad (the picker prefers long ones)
+  const p = H.pickLines(one, have(), new Set(sents.flatMap(r => [...r.lines, r.lines.join('').replace(/ /g, '')])), Math.random, 1, 1);
   if (!p.lines.length) return toast('You have written every sentence!');
-  const wb = H.wordBoxes(p.lines, fb, 12), go = () => { spage = { lines: wb.lines, w: Math.max(8, wb.w), boxes: wb.boxes }; LS.set('spage', spage); sink = []; renderSent(); }; // rows ≤12 wide: bigger writing
+  const cb = H.layout(p.lines[0], null, { x: 0, y: 0, width: 1e4, u: 1, seed: 1, fb }).cb.filter(Boolean), tw = cb.length ? Math.max(...cb.map(c => c[2])) - Math.min(...cb.map(c => c[0])) : 8;
+  const w = +Math.max(11, 1.3 * tw + 1).toFixed(2), go = () => { spage = { lines: [p.lines[0]], w }; LS.set('spage', spage); sink = []; renderSent(); }; // room for the hand: 1.3x the typed width
   if (anim) M.swap([$('#sentText'), spadCv()], 1, go); else go();
 }
 function renderSent() {
-  if (!spage || !spage.boxes) return newPage();
+  if (!spage || spage.boxes || spage.lines.length !== 1) return newPage(); // a v25 page (boxes, rows) is swapped for a one-line one
   const ol = $('#sentText'); ol.textContent = '';
   for (const l of spage.lines) { const li = document.createElement('li'); li.textContent = l; ol.append(li); }
   sizeSpad();
 }
 function sizeSpad() {
   const st = $('.sstage'), cv = spadCv(), rows = spage.lines.length; if (!st.clientWidth) return;
-  spadU = Math.min(st.clientWidth / spage.w, st.clientHeight / (rows * ROW));
+  spadU = Math.min(st.clientWidth / spage.w, st.clientHeight / (rows * ROW), 56); // ≤56px between the x-height and base lines (~11 mm on iPad): handwriting size
   cv.style.width = spage.w * spadU + 'px'; cv.style.height = rows * ROW * spadU + 'px';
   drawSpad();
 }
@@ -301,9 +303,11 @@ function drawSpad() {
   const x = cv.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, W, Ht); x.setTransform(k, 0, 0, k, 0, 0);
   x.lineWidth = 1 / spadU;
   const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / spadU, 4 / spadU] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(spage.w, y); x.stroke(); };
-  for (let r = 0; r < rows; r++) { const y = r * ROW; hl(y + 0.3, '#e7e5df', 1); hl(y + H.XH, '#d3d0c8'); hl(y + H.BASE, '#a29e94'); hl(y + 2.5, '#e7e5df', 1); } // the Letters pad's lines, per row
-  x.strokeStyle = 'rgba(255,77,23,0.45)'; x.setLineDash([6 / spadU, 5 / spadU]); x.lineWidth = 1.5 / spadU;
-  for (const q of spage.boxes) { x.beginPath(); x.roundRect ? x.roundRect(q.x0, q.r * ROW + 0.12, q.x1 - q.x0, ROW - 0.24, 0.12) : x.rect(q.x0, q.r * ROW + 0.12, q.x1 - q.x0, ROW - 0.24); x.stroke(); } // write each word in its box
+  for (let r = 0; r < rows; r++) { // the Letters pad's lines; the letter body goes in the tinted band between x-height and base
+    const y = r * ROW; x.fillStyle = 'rgba(255,77,23,0.07)'; x.fillRect(0, y + H.XH, spage.w, H.BASE - H.XH);
+    hl(y + 0.3, '#e2dfd8', 1); hl(y + 2.5, '#e2dfd8', 1);
+    x.lineWidth = 1.5 / spadU; hl(y + H.XH, '#b3afa5'); x.lineWidth = 2.5 / spadU; hl(y + H.BASE, '#5c5952'); x.lineWidth = 1 / spadU;
+  }
   x.setLineDash([]); x.strokeStyle = '#141414'; x.lineWidth = 0.075; x.lineCap = x.lineJoin = 'round';
   for (const a of sink) strokeLine(x, a);
   if (drawing) strokeLine(x, drawing.pts);
@@ -338,7 +342,7 @@ function buildSent() {
   $('#sSkip').onclick = () => { if (!sink.length || confirm('Throw away what you wrote here and get another sentence?')) newPage(true); };
   $('#sNext').onclick = () => {
     if (!sink.length) return toast('Copy the lines on the pad first.');
-    sents.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), lines: spage.lines, s: sink, w: spage.w, boxes: spage.boxes });
+    sents.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), lines: spage.lines, s: sink, w: spage.w });
     saveSents(); renderSentList(); toast(`Saved. ${sents.length} written so far.`, 2000); newPage(true); cutAll();
   };
 }
