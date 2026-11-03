@@ -530,7 +530,7 @@ async function buildPdf() {
 async function exportPdf() {
   if (!sheet) return; select(null);
   const btn = $('#exportBtn'); btn.disabled = true;
-  try { await saveFile(new Blob([await buildPdf()], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf'); if (!M.flash('SAVED.')) doneToast('PDF saved'); }
+  try { await saveFile(new Blob([await buildPdf()], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf'); if (!M.flash('SAVED.')) doneToast('PDF saved'); if (!LS.get('support', false)) { LS.set('support', true); setTimeout(openSupport, 1800); } }
   catch (e) { console.error(e); toast('Could not make the PDF: ' + e.message, 6000); }
   btn.disabled = false;
 }
@@ -598,6 +598,9 @@ function wire() {
   const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   if (ios && !standalone && !LS.get('hint', false)) $('#installHint').hidden = false;
   $('#hideHint').onclick = () => { $('#installHint').hidden = true; LS.set('hint', true); };
+  $('#supOpen').onclick = e => { e.stopPropagation(); $('#menuList').hidden = true; openSupport(); };
+  $('#supClose').onclick = () => ($('#support').hidden = true);
+  $('#support').onclick = e => { if (e.target.id === 'support') $('#support').hidden = true; };
 }
 
 async function runTests() { // open with ?test
@@ -621,6 +624,9 @@ async function runTests() { // open with ?test
   out.insertAdjacentHTML('afterbegin', `<h3>${fails.length ? 'TEST FAIL' : 'TEST PASS'} (${res.length - fails.length}/${res.length})</h3>` + res.map(r => `<div>${r.ok ? '✅' : '❌'} ${r.name} ${r.info}</div>`).join(''));
   document.title = fails.length ? 'TEST FAIL' : 'TEST PASS';
 }
+
+const SUPPORT_URL = ''; // paste a Ko-fi / PromptPay link here; empty = popup has no support button
+function openSupport() { $('#supLink').hidden = !SUPPORT_URL; if (SUPPORT_URL) $('#supLink').href = SUPPORT_URL; $('#support').hidden = false; }
 
 (async function init() {
   buildTeach(); wire();

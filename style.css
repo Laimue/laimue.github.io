@@ -242,6 +242,12 @@ input[type=range] { width: 120px; accent-color: var(--orange); height: 44px; }
 .lot.tick { width: 22px; height: 22px; flex: none; color: var(--orange); }
 
 /* ---------- welcome intro: grid ground, spark, the name in the person's own hand */
+#support { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; padding: 24px 16px; background: rgb(0 0 0 / .35); }
+.sup-card { width: min(340px, 100%); padding: 24px; display: grid; gap: 12px; }
+.sup-card h2 { margin: 0; font-size: 20px; }
+.sup-card p { margin: 0; font-size: 15px; line-height: 1.45; }
+.sup-actions { display: grid; gap: 8px; margin-top: 4px; }
+.sup-actions .btn { width: 100%; }
 #intro { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; padding: 24px 16px; overflow: auto;
   background-color: var(--ground); background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 44px 44px; }
 .in-skip { position: absolute; top: calc(10px + env(safe-area-inset-top)); right: 12px; min-height: 44px; padding: 0 16px; border-radius: 999px; color: var(--muted); font-weight: 600; }

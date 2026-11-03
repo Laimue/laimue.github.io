@@ -55,6 +55,7 @@
       <input id="loadHandFile" type="file" accept=".json,application/json" hidden>
       <button id="themeBtn"><svg class="i"><use href="#i-theme"/></svg>Theme: <span id="themeName">Auto</span></button>
       <button id="playIntro"><svg class="i"><use href="#i-pen"/></svg>Play the welcome intro</button>
+      <button id="supOpen"><svg class="i"><use href="#i-more"/></svg>About &amp; support</button>
       <button id="clearHand" class="danger"><svg class="i"><use href="#i-trash"/></svg>Clear all my letters</button>
       <div id="ver"></div>
     </div>
@@ -141,6 +142,17 @@
       <li><b class="hot">Save.</b><span>Save a PDF that looks handwritten.</span></li>
     </ol>
     <button class="in-start btn primary">Start writing</button>
+  </div>
+</div>
+<div id="support" hidden role="dialog" aria-modal="true" aria-labelledby="supTitle">
+  <div class="sup-card float">
+    <h2 id="supTitle">LaiMue is free</h2>
+    <p>No ads, no account, no tracking. Your handwriting stays on this device.</p>
+    <p>If it helps your studying, you can support it. Totally optional.</p>
+    <div class="sup-actions">
+      <a id="supLink" class="btn primary" target="_blank" rel="noopener" hidden>Support LaiMue</a>
+      <button id="supClose" class="btn">Not now</button>
+    </div>
   </div>
 </div>
 <div class="glow" aria-hidden="true"></div>
