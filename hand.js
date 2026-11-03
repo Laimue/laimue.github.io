@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 21; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 22; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -567,8 +567,10 @@
   const isCmd = n => MSYM.hasOwnProperty(n) || FN.has(n) || MSPACE.hasOwnProperty(n) || ACC.test(n) || NOOP.test(n)
     || /^([dt]?frac|binom|sqrt|text\w*|math\w+|operatorname|mbox|boxed|left|right|begin|end|bm|boldsymbol|emph|underbrace|overbrace|tag)$/.test(n);
   // one math token: a whole \begin..\end, \command, \, \_ \\, {..} nested 3 deep, 1-2 letters (dx, not "is"), a number, an operator
-  const TOK = String.raw`(?:\\begin\{[a-zA-Z*]+\}[\s\S]*?\\end\{[a-zA-Z*]+\}|\\[a-zA-Z]+\*?|\\\\|\\[,;:! {}|_*]|\{(?:[^{}\n]|\{(?:[^{}\n]|\{[^{}\n]*\})*\})*\}|(?!(?:is|of|to|in|on|at|so|if|or|an|as|be|by|it|we|do|no|up|my|he|us|am)(?![A-Za-z]))[A-Za-z]{1,2}(?![A-Za-z])|\d+(?:\.\d+)?|[-+*/=<>()[\]|^_!',.&])`;
-  const BARE = new RegExp(TOK + '(?:[ \\t]*' + TOK + ')*', 'g');
+  let BR = String.raw`\{[^{}]*\}`; for (let d = 0; d < 4; d++) BR = String.raw`\{(?:[^{}]|` + BR + String.raw`)*\}`; // {..} nested 5 deep, may span lines
+  const TOK = String.raw`(?:\\begin\{[a-zA-Z*]+\}[\s\S]*?\\end\{[a-zA-Z*]+\}|\\[a-zA-Z]+\*?|\\\\|\\[,;:! {}|_*]|` + BR + String.raw`|(?!(?:is|of|to|in|on|at|so|if|or|an|as|be|by|it|we|do|no|up|my|he|us|am)(?![A-Za-z]))[A-Za-z]{1,2}(?![A-Za-z])|\d+(?:\.\d+)?|[-+*/=<>]\s*|[()[\]|^_!',.&])`;
+  // separate lines stay separate formulas; a formula carries on over a line break inside { } or next to = + - < >
+  const BARE = new RegExp(TOK + String.raw`(?:(?:[ \t]*|\s*(?=[-+=<>]))` + TOK + ')*', 'g');
   // Pasted text -> ['\n' | {t:'txt', s, bold} | {t:'math', node}]. Markdown from AI chats: **bold**, __bold__, # headings, * / - / + bullets.
   function rich(text) {
     const B0 = '\u0001', B1 = '\u0002'; // bold on / off
@@ -1300,6 +1302,10 @@
     t('\\boxed draws a pen box', LO('$\\boxed{x}$').strokes.length >= LO('$x$').strokes.length + 2);
     t('LaTeX typed with no $ is math; words and C:\\Users stay text', kinds('ค่า \\frac{1}{2} คือ') === 'txt:ค่า |math|txt: คือ' && kinds('the answer is \\alpha + 1.') === 'txt:the answer is |math' && kinds('C:\\Users\\me') === 'txt:C:\\Users\\me' && kinds('\\int_0^1 x\\,dx') === 'math',
       kinds('ค่า \\frac{1}{2} คือ') + ' / ' + kinds('the answer is \\alpha + 1.') + ' / ' + kinds('C:\\Users\\me'));
+    { const s = '\\boxed{\n\\lim_{n\\to\\infty}\n\\sum_{k=1}^{n}\\frac{1}{k^2}\n=\n\\frac{\\pi^2}{6}\n}', e = rich(s);
+      const n = s => rich(s).filter(x => x.t === 'math').length;
+      t('LaTeX typed over several lines is one formula; separate lines stay separate', e.length === 1 && e[0].disp && e[0].node.a[0].t === 'boxed' && n('\\alpha + 1\n\\beta') === 2 && n('\\frac{1}{2}\n= 0.5') === 1,
+        kinds(s) + ' / ' + n('\\alpha + 1\n\\beta') + ' / ' + n('\\frac{1}{2}\n= 0.5')); }
     t('a fraction pushes the next line down', LO('$\\frac{1}{2}$\nก').height > LO('ก\nก').height + 2);
     const miss = [...GROUPS[5][1] + GROUPS[8][1]].filter(ch => !variantsFor(null, ch, fb, null).length);
     t('every Teach symbol can be written untaught', !miss.length, miss.join(''));

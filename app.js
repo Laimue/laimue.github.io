@@ -236,11 +236,15 @@ const layKey = b => [b.text, b.w, b.u, b.gap, b.seed, b.neat ?? 1, ink.thick, JS
 const lay = b => {
   const key = layKey(b);
   let c = b.lc;
-  if (!c || c.key !== key) c = b.lc = { key, x: b.x, y: b.y, r: H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods }) };
-  else if (c.x !== b.x || c.y !== b.y) { // pens hold the same arrays as strokes, so each point moves once
+  if (!c || c.key !== key) {
+    const r = H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods });
+    const e = r.ink = [Infinity, Infinity, -Infinity, -Infinity]; // what was written (a wide formula can pass the box edge)
+    for (const a of [...r.strokes, ...r.fills]) for (let i = 0; i < a.length; i += 2) { e[0] = Math.min(e[0], a[i]); e[2] = Math.max(e[2], a[i]); e[1] = Math.min(e[1], a[i + 1]); e[3] = Math.max(e[3], a[i + 1]); }
+    c = b.lc = { key, x: b.x, y: b.y, r };
+  } else if (c.x !== b.x || c.y !== b.y) { // pens hold the same arrays as strokes, so each point moves once
     const dx = b.x - c.x, dy = b.y - c.y;
     for (const a of [...c.r.strokes, ...c.r.fills]) for (let i = 0; i < a.length; i += 2) { a[i] += dx; a[i + 1] += dy; }
-    for (const q of c.r.cb) if (q) { q[0] += dx; q[1] += dy; q[2] += dx; q[3] += dy; }
+    for (const q of [...c.r.cb, c.r.ink]) if (q) { q[0] += dx; q[1] += dy; q[2] += dx; q[3] += dy; }
     c.x = b.x; c.y = b.y;
   }
   return c.r;
@@ -348,7 +352,10 @@ function renderInk(pg) {
     const r = b.r = lay(b); b.h = Math.max(r.height, b.u * 2.6);
     html += '<g>' + stkPaths(r, ink.color);
     html += (r.fills.length ? `<path class="fil" d="${pathD(r.fills, true)}" fill="${ink.color}"/>` : '') + '</g>';
-    const s = b.el.style; s.left = 100 * b.x / pg.w + '%'; s.top = 100 * b.y / pg.h + '%'; s.width = 100 * b.w / pg.w + '%'; s.height = ed && ed.box === b ? 'auto' : 100 * b.h / pg.h + '%';
+    // the box frames what was written: it grows past its width/top when a formula reaches out (empty ink = Infinity, so min/max keep the box)
+    const s = b.el.style, open = ed && ed.box === b, p = b.u * 0.25, e = r.ink;
+    const x0 = open ? b.x : Math.min(b.x, e[0] - p), y0 = open ? b.y : Math.min(b.y, e[1] - p), x1 = open ? b.x + b.w : Math.max(b.x + b.w, e[2] + p), y1 = Math.max(b.y + b.h, e[3] + p);
+    s.left = 100 * x0 / pg.w + '%'; s.top = 100 * y0 / pg.h + '%'; s.width = 100 * (x1 - x0) / pg.w + '%'; s.height = open ? 'auto' : 100 * (y1 - y0) / pg.h + '%';
   }
   pg.svg.innerHTML = html;
   pg.boxes.forEach((b, i) => { b.g = pg.svg.children[i]; if (ed && ed.box === b) b.g.style.visibility = 'hidden'; }); // its handwriting hides while the text is open
