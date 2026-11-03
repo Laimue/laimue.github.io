@@ -181,12 +181,6 @@ input[type=range] { width: 120px; accent-color: var(--orange); height: 44px; }
 #panel { position: absolute; z-index: 25; display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; padding: 0 4px 0 14px; width: max-content; max-width: 100%; }
 #panel label { font-size: 13px; gap: 6px; }
 #panel input[type=range] { width: 92px; }
-#panel .sig { font-size: 22px; line-height: 1; font-weight: 700; }
-#panel #mathBtn[aria-expanded=true] { color: var(--orange); }
-#mathKeys { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px; padding: 2px 0 10px; }
-#mathKeys[hidden] { display: none; }
-#mathKeys button { min-width: 44px; height: 44px; padding: 0 8px; border-radius: 8px; font-size: 17px; border: 1px solid var(--bracket); }
-#mathKeys button:active { background: var(--active); }
 .tbox.busy::after { content: 'writing…'; position: absolute; left: 6px; top: 4px; font: 600 13px/1 ui-monospace, monospace; color: var(--orange); animation: m-blink .8s infinite alternate; }
 @keyframes m-blink { from { opacity: 1; } to { opacity: .35; } }
 #txt, .typed-out { display: block; width: 100%; margin: 0; padding: 0 2px; border: 0; border-radius: 0; background: none; color: #0d0d0d; font-family: var(--font); resize: none; overflow: hidden;

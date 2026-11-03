@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 20; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 21; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -564,6 +564,11 @@
     }
     return row(null);
   }
+  const isCmd = n => MSYM.hasOwnProperty(n) || FN.has(n) || MSPACE.hasOwnProperty(n) || ACC.test(n) || NOOP.test(n)
+    || /^([dt]?frac|binom|sqrt|text\w*|math\w+|operatorname|mbox|boxed|left|right|begin|end|bm|boldsymbol|emph|underbrace|overbrace|tag)$/.test(n);
+  // one math token: a whole \begin..\end, \command, \, \_ \\, {..} nested 3 deep, 1-2 letters (dx, not "is"), a number, an operator
+  const TOK = String.raw`(?:\\begin\{[a-zA-Z*]+\}[\s\S]*?\\end\{[a-zA-Z*]+\}|\\[a-zA-Z]+\*?|\\\\|\\[,;:! {}|_*]|\{(?:[^{}\n]|\{(?:[^{}\n]|\{[^{}\n]*\})*\})*\}|(?!(?:is|of|to|in|on|at|so|if|or|an|as|be|by|it|we|do|no|up|my|he|us|am)(?![A-Za-z]))[A-Za-z]{1,2}(?![A-Za-z])|\d+(?:\.\d+)?|[-+*/=<>()[\]|^_!',.&])`;
+  const BARE = new RegExp(TOK + '(?:[ \\t]*' + TOK + ')*', 'g');
   // Pasted text -> ['\n' | {t:'txt', s, bold} | {t:'math', node}]. Markdown from AI chats: **bold**, __bold__, # headings, * / - / + bullets.
   function rich(text) {
     const B0 = '\u0001', B1 = '\u0002'; // bold on / off
@@ -579,17 +584,32 @@
       return l.replace(/\*\*(?=\S)(.+?)\*\*/g, B0 + '$1' + B1).replace(/__(?=\S)(.+?)__/g, B0 + '$1' + B1);
     }).join('\n');
     const out = []; let bold = false;
+    // markdown-escaped math: \_ -> _, \\, -> \, ; \\\\ -> the row break \\ and \\{ -> the brace \{
+    const unesc = (src, esc) => (esc || /\\[_*]/.test(src) || (/\\\\[,;:!]/.test(src) && !/\\begin/.test(src)) ? src.replace(/\\([\\_*[\]~])/g, '$1') : src);
+    const sub = part => {
+      // shortcut: a_n / x^2 outside $ is math too (user's choice), so snake_case words get a subscript; add an escape if that bites
+      let last = 0; const re = /([A-Za-z0-9)\]])((?:[_^](?:\{[^{}\n]*\}|\d+|[A-Za-z]))+)/g; let m;
+      const plain = s => out.push({ t: 'txt', s: s.replace(/\\([\\_*#~`[\]])/g, '$1'), bold }); // markdown escapes (a\_b, \*) are the plain character
+      while ((m = re.exec(part))) {
+        if (m.index > last) plain(part.slice(last, m.index));
+        out.push({ t: 'math', node: mathParse(m[0]), bold }); last = re.lastIndex;
+      }
+      if (last < part.length) plain(part.slice(last));
+    };
     const txt = s => {
       for (const part of s.split(/([\u0001\u0002])/)) {
         if (part === B0) { bold = true; continue; } if (part === B1) { bold = false; continue; }
-        // shortcut: a_n / x^2 outside $ is math too (user's choice), so snake_case words get a subscript; add an escape if that bites
-        let last = 0; const re = /([A-Za-z0-9)\]])((?:[_^](?:\{[^{}\n]*\}|\d+|[A-Za-z]))+)/g; let m;
-        const plain = s => out.push({ t: 'txt', s: s.replace(/\\([\\_*#~`[\]])/g, '$1'), bold }); // markdown escapes (a\_b, \*) are the plain character
-        while ((m = re.exec(part))) {
-          if (m.index > last) plain(part.slice(last, m.index));
-          out.push({ t: 'math', node: mathParse(m[0]), bold }); last = re.lastIndex;
+        // LaTeX typed with no $ round it: a run of math tokens holding a known \command is math; English words (2+ letters) end the run
+        let last = 0, m; BARE.lastIndex = 0;
+        while ((m = BARE.exec(part))) {
+          let st = m.index, r = m[0];
+          if (/[A-Za-z]/.test(part[st - 1] || '')) { const w = /^[A-Za-z]*/.exec(r)[0].length; r = r.slice(w); st += w; } // "the \frac": the e belongs to the word
+          if (!(r.match(/\\[a-zA-Z]+/g) || []).some(c => isCmd(c.slice(1)))) continue;
+          const st2 = st + r.length - r.trimStart().length, core = r.trim(), en = st2 + core.length;
+          const disp = !part.slice(part.lastIndexOf('\n', st2 - 1) + 1, st2).trim() && !/^[^\n]*/.exec(part.slice(en))[0].trim(); // alone on its line
+          sub(part.slice(last, st2)); out.push({ t: 'math', node: mathParse(unesc(core)), bold, disp }); last = en;
         }
-        if (last < part.length) plain(part.slice(last));
+        sub(part.slice(last));
       }
     };
     const lineStart = () => { const e = out[out.length - 1]; return !e || e === '\n' || (e.t === 'txt' && /\n\s*$/.test(e.s)); };
@@ -603,10 +623,7 @@
       // $$..$$ mid-sentence is inline (Claude's copy button writes inline math that way); alone on its line it is display
       const lineAlone = !text.slice(text.lastIndexOf('\n', m.index - 1) + 1, m.index).trim() && !/^[^\n]*/.exec(text.slice(last))[0].trim();
       const disp = m[1] != null || m[4] != null || (m[3] != null && lineAlone);
-      let src = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? m[7];
-      // markdown-escaped math: \_ -> _, \\, -> \, ; \\\\ -> the row break \\ and \\{ -> the brace \{
-      if (m[1] != null || m[2] != null || /\\[_*]/.test(src) || (/\\\\[,;:!]/.test(src) && !/\\begin/.test(src))) src = src.replace(/\\([\\_*[\]~])/g, '$1');
-      const node = mathParse(src);
+      const node = mathParse(unesc(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? m[7], m[1] != null || m[2] != null));
       if (disp && !lineStart()) out.push('\n');
       out.push({ t: 'math', node, bold, disp });
       if (disp && !/^\s*\n/.test(text.slice(last))) out.push('\n');
@@ -1281,6 +1298,8 @@
       const sD = iw(LO('\\[\\sum_{n=1}^{9}\\]')), sI = iw(LO('$\\sum_{n=1}^{9}$')), iD = iw(LO('\\[\\int_{0}^{9}\\]')), i0 = iw(LO('\\[\\int\\]'));
       t('display: Σ limits under/over, ∫ limits beside', sD < sI * 0.85 && iD > i0 + 3, 'Σ ' + sD.toFixed(1) + ' vs ' + sI.toFixed(1) + ', ∫ ' + iD.toFixed(1) + ' vs ' + i0.toFixed(1)); }
     t('\\boxed draws a pen box', LO('$\\boxed{x}$').strokes.length >= LO('$x$').strokes.length + 2);
+    t('LaTeX typed with no $ is math; words and C:\\Users stay text', kinds('ค่า \\frac{1}{2} คือ') === 'txt:ค่า |math|txt: คือ' && kinds('the answer is \\alpha + 1.') === 'txt:the answer is |math' && kinds('C:\\Users\\me') === 'txt:C:\\Users\\me' && kinds('\\int_0^1 x\\,dx') === 'math',
+      kinds('ค่า \\frac{1}{2} คือ') + ' / ' + kinds('the answer is \\alpha + 1.') + ' / ' + kinds('C:\\Users\\me'));
     t('a fraction pushes the next line down', LO('$\\frac{1}{2}$\nก').height > LO('ก\nก').height + 2);
     const miss = [...GROUPS[5][1] + GROUPS[8][1]].filter(ch => !variantsFor(null, ch, fb, null).length);
     t('every Teach symbol can be written untaught', !miss.length, miss.join(''));

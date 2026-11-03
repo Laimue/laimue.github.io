@@ -374,21 +374,12 @@ function openEd() {
 function closeEd() {
   if (!ed) return;
   const { pg, box } = ed, t = $('#txt'); ed = null;
-  box.el.classList.remove('edit'); $('#mathKeys').hidden = true; $('#mathBtn').setAttribute('aria-expanded', false);
+  box.el.classList.remove('edit');
   const has = !!box.text.trim(), done = () => { box.el.classList.remove('busy'); renderInk(pg); if (has && box.g) M.writeOn(box.g, 1.5); };
   if (has) M.handover(box.el, t);
   // long text takes a moment to write: show "writing…" first (two frames so it paints) instead of a frozen screen
   if (box.text.length > 120 && !(box.lc && box.lc.key === layKey(box))) { box.el.classList.add('busy'); requestAnimationFrame(() => requestAnimationFrame(done)); } else done();
   t.hidden = true; document.body.append(t); t.blur();
-}
-function mathKey(k) { // v19 math keys: write the LaTeX at the caret, wrapped in $..$ unless already in math; | = where the caret lands
-  if (!ed) openEd(); if (!ed) return;
-  const t = $('#txt'), s0 = t.selectionStart, s1 = t.selectionEnd, b = t.value.slice(0, s0).replace(/\\\$/g, ''); // \$ is a plain dollar
-  const inMath = (b.match(/\$\$/g) || []).length % 2 || (b.replace(/\$\$/g, '').match(/\$/g) || []).length % 2 || b.lastIndexOf('\\(') > b.lastIndexOf('\\)') || b.lastIndexOf('\\[') > b.lastIndexOf('\\]');
-  let tx = inMath || /^[\^_]\{/.test(k) ? k : '$' + k.replace(/ $/, '') + '$'; // x^{2} / a_{n} work outside $ too
-  const at = tx.indexOf('|'); tx = tx.replace('|', '');
-  t.setRangeText(tx, s0, s1, 'end'); if (at >= 0) t.setSelectionRange(s0 + at, s0 + at);
-  t.focus({ preventScroll: true }); t.dispatchEvent(new Event('input'));
 }
 function fitEd() { // typed text at the box's handwriting size, on screen pixels
   if (!ed) return;
@@ -596,13 +587,6 @@ function wire() {
   $('#ver').textContent = 'LaiMue version ' + H.VERSION;
   $('#shuf').onclick = () => { if (!sel) return; closeEd(); sel.box.seed = (Math.random() * 1e9) | 0; renderInk(sel.pg); M.writeOn(sel.box.g, 1.5); };
   $('#del').onclick = () => { if (sel) { sel.box.text = ''; select(null); } }; // an empty box is removed on close
-  const MK = [['a/b', '\\frac{|}{}'], ['x²', '^{|}'], ['xₙ', '_{|}'], ['√', '\\sqrt{|}'], ['ⁿ√', '\\sqrt[|]{}'], ['( )', '(|)'], ['±', '\\pm '], ['×', '\\times '], ['÷', '\\div '],
-    ['≤', '\\le '], ['≥', '\\ge '], ['≠', '\\ne '], ['≈', '\\approx '], ['π', '\\pi '], ['θ', '\\theta '], ['α', '\\alpha '], ['β', '\\beta '], ['Δ', '\\Delta '], ['Σ', '\\sum '], ['∞', '\\infty '], ['→', '\\to '], ['°', '^\\circ ']];
-  const mk = $('#mathKeys');
-  for (const [l, k] of MK) { const b = document.createElement('button'); b.textContent = l; b.dataset.k = k; b.setAttribute('aria-label', 'Insert ' + l); mk.append(b); }
-  $('#mathBtn').onclick = () => { mk.hidden = !mk.hidden; $('#mathBtn').setAttribute('aria-expanded', !mk.hidden); placeBar(); };
-  mk.addEventListener('mousedown', e => e.preventDefault()); // keep the keyboard and caret in the text
-  mk.addEventListener('click', e => { const b = e.target.closest('button'); if (b) mathKey(b.dataset.k); });
   const ios = navigator.maxTouchPoints > 1 && /iPad|iPhone|Macintosh/.test(navigator.userAgent);
   const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   if (ios && !standalone && !LS.get('hint', false)) $('#installHint').hidden = false;
