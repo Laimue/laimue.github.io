@@ -113,6 +113,7 @@ function paint(cv, i, o = {}) {
   if (H.needsGhost(c.ch)) { const g = fb('ก'); if (g) { x.fillStyle = '#dad8d2'; fillPolys(x, g.p); } }
   const v = vOf(i), ty = !v && fb(c.ch); // empty box: faint typed letter as a "write here" guide; the app fixes the rest
   if (ty && ty.p) { x.fillStyle = o.guides ? 'rgba(255,77,23,0.13)' : 'rgba(0,0,0,0.16)'; fillPolys(x, ty.p); }
+  else if (!v && H.synth(c.ch)) { x.strokeStyle = o.guides ? 'rgba(255,77,23,0.3)' : 'rgba(0,0,0,0.3)'; x.lineWidth = 0.075; x.lineCap = x.lineJoin = 'round'; for (const a of H.synth(c.ch).s) strokeLine(x, a); } // symbol the font lacks (θ α β Σ ∈)
   x.restore();
   x.strokeStyle = '#141414'; x.lineWidth = o.guides ? 0.075 : 0.11; x.lineCap = x.lineJoin = 'round';
   for (const a of v ? v.s : []) strokeLine(x, a);
@@ -555,12 +556,11 @@ function wire() {
   $('#thick').value = ink.thick;
   $('#thick').oninput = () => { ink.thick = +$('#thick').value; LS.set('thick', ink.thick); if (sheet) sheet.pages.forEach(renderInk); };
   const t = $('#txt');
-  t.oninput = () => { // one line per box: pasted line breaks become spaces
+  t.oninput = () => { // Enter and pasted line breaks start new lines
     if (!ed) return;
-    if (/[\r\n]/.test(t.value)) { const c = t.selectionStart; t.value = t.value.replace(/\r?\n|\r/g, ' '); t.setSelectionRange(c, c); }
     ed.box.text = t.value; ed.box.mods = null; fitEd(); // shortcut: lasso edits are keyed by letter index, so typing drops them
   };
-  t.onkeydown = e => { if ((e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) || e.key === 'Escape') { e.preventDefault(); select(null); } }; // 229 = Thai keyboard still composing
+  t.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); select(null); } }; // finish = Esc, tap outside or hide the keyboard
   t.onblur = () => { if (ed && Date.now() - barT > 400) closeEd(); }; // keyboard closed: write it, keep the box selected
   const bar = $('#panel'), stop = e => { e.stopPropagation(); barT = Date.now(); };
   bar.addEventListener('pointerdown', stop); bar.addEventListener('pointerup', e => { stop(e); if (ed && document.activeElement !== t) t.focus({ preventScroll: true }); });
