@@ -105,10 +105,10 @@ const M = (() => {
     gsap.killTweensOf(els);
     gsap.timeline()
       .to(els, { x: -dir * 36, opacity: 0, filter: 'blur(6px)', duration: 0.12, ease: 'power2.in', onComplete: mid })
-      .fromTo(els, { x: dir * 70, opacity: 0, scale: 1.05, filter: 'blur(10px)' }, { x: 0, opacity: 1, scale: 1, filter: 'blur(0px)', duration: 0.34, ease: 'expo.out', clearProps: 'all' });
+      .fromTo(els, { x: dir * 70, opacity: 0, scale: 1.05, filter: 'blur(10px)' }, { x: 0, opacity: 1, scale: 1, filter: 'blur(0px)', duration: 0.34, ease: 'expo.out', clearProps: 'transform,opacity,filter' }); // only what the swap set: 'all' also wiped the app's own size (the Sentences pad went to raw canvas pixels, 2x on iPad)
   }
   // stop a swap at once (the Pencil came down); true if one was running
-  function settle(el) { if (typeof gsap === 'undefined' || !gsap.isTweening(el)) return false; gsap.killTweensOf(el); gsap.set(el, { clearProps: 'all' }); return true; }
+  function settle(el) { if (typeof gsap === 'undefined' || !gsap.isTweening(el)) return false; gsap.killTweensOf(el); gsap.set(el, { clearProps: 'transform,opacity,filter' }); return true; }
 
   // ---------- tab switch: an orange scan line sweeps across, the new section sharpens in
   function tab(el) {
