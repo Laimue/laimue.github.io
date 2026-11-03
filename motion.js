@@ -9,7 +9,7 @@ const M = (() => {
     if (!el || !can()) return null;
     const ps = [...el.querySelectorAll('path.stk')], fills = [...el.querySelectorAll('path.fil')];
     gsap.killTweensOf([...ps, ...fills]);
-    if (ps.length > 1500) return null; // shortcut: huge sheets skip the animation, iPad would stutter
+    if (ps.length > 400) return null; // shortcut: long text skips the animation (one tween per stroke stutters on iPad)
     const lens = ps.map(p => p.getTotalLength() || 0.01), sum = lens.reduce((a, b) => a + b, 0);
     const k = Math.min(maxSec, 0.09 * ps.length + 0.3) / (sum || 1); // seconds per unit length, total capped
     const tl = gsap.timeline({ onComplete: () => gsap.set(ps, { clearProps: 'strokeDasharray,strokeDashoffset,visibility' }) });

@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 18; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 19; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -65,6 +65,39 @@
     'Σ': [[0.8, 0.85, 0.8, 0.75, 0.2, 0.75, 0.55, 1.5, 0.2, 2.25, 0.8, 2.25, 0.8, 2.15]],
     '→': [[0.12, 1.5, 0.88, 1.5], [0.68, 1.32, 0.88, 1.5, 0.68, 1.68]], '⇒': [[0.12, 1.4, 0.8, 1.4], [0.12, 1.6, 0.8, 1.6], [0.66, 1.22, 0.9, 1.5, 0.66, 1.78]],
     '∈': [[0.78, 1.08, 0.48, 1.08, 0.3, 1.2, 0.24, 1.5, 0.3, 1.8, 0.48, 1.92, 0.78, 1.92], [0.26, 1.5, 0.7, 1.5]],
+    // v19: the rest of what pasted LaTeX can produce that Sriracha has no glyph for
+    '∮': [[0.7, 0.7, 0.6, 0.62, 0.5, 0.75, 0.45, 1.5, 0.4, 2.25, 0.3, 2.38, 0.2, 2.3], arc(0.45, 1.5, 0.15, 0.15, 0, 2 * PI)],
+    '∇': [[0.15, 1.0, 0.85, 1.0, 0.5, 2.0, 0.15, 1.0]], 'Π': [[0.2, 0.78, 0.8, 0.78], [0.3, 0.78, 0.3, 2.0], [0.7, 0.78, 0.7, 2.0]],
+    'ε': [[0.78, 1.12, 0.6, 1.02, 0.38, 1.05, 0.3, 1.25, 0.45, 1.45, 0.3, 1.55, 0.25, 1.78, 0.42, 1.97, 0.62, 1.97, 0.8, 1.85]],
+    'ω': [[0.3, 1.05, 0.2, 1.45, 0.28, 1.9, 0.4, 1.95, 0.5, 1.7, 0.5, 1.45, 0.5, 1.7, 0.6, 1.95, 0.72, 1.9, 0.8, 1.45, 0.7, 1.05]],
+    'φ': [[0.5, 0.8, 0.5, 2.35], arc(0.5, 1.5, 0.28, 0.45, 0, 2 * PI, 14)], 'Φ': [[0.5, 0.75, 0.5, 2.25], arc(0.5, 1.5, 0.32, 0.4, 0, 2 * PI, 14)],
+    'ρ': [[0.3, 2.35, 0.3, 1.5, 0.38, 1.15, 0.52, 1.03, 0.68, 1.12, 0.76, 1.45, 0.7, 1.82, 0.52, 1.97, 0.35, 1.85]],
+    'τ': [[0.15, 1.12, 0.28, 1.03, 0.85, 1.03], [0.5, 1.04, 0.48, 1.85, 0.58, 1.98, 0.7, 1.92]],
+    'η': [[0.22, 1.1, 0.3, 1.03, 0.35, 1.2, 0.35, 2.0], [0.35, 1.35, 0.48, 1.08, 0.62, 1.03, 0.72, 1.2, 0.72, 2.35]],
+    'ζ': [[0.35, 0.78, 0.7, 0.78, 0.38, 1.15, 0.25, 1.55, 0.3, 1.85, 0.5, 1.97, 0.65, 2.05, 0.6, 2.3, 0.5, 2.35]],
+    'ξ': [[0.35, 0.78, 0.7, 0.78], [0.62, 0.8, 0.4, 0.9, 0.4, 1.15, 0.6, 1.25], [0.6, 1.25, 0.35, 1.35, 0.3, 1.65, 0.45, 1.95, 0.65, 2.05, 0.6, 2.3, 0.5, 2.35]],
+    'ψ': [[0.5, 0.78, 0.5, 2.35], [0.18, 1.05, 0.25, 1.6, 0.4, 1.88, 0.5, 1.9, 0.62, 1.88, 0.75, 1.6, 0.82, 1.05]],
+    'χ': [[0.18, 1.05, 0.3, 1.03, 0.75, 2.32, 0.85, 2.35], [0.82, 1.05, 0.2, 2.35]], 'κ': [[0.3, 1.03, 0.3, 2.0], [0.75, 1.05, 0.3, 1.55, 0.78, 2.0]],
+    'ν': [[0.2, 1.05, 0.3, 1.03, 0.48, 1.98, 0.68, 1.6, 0.8, 1.05]], 'Γ': [[0.25, 2.25, 0.25, 0.75, 0.8, 0.75, 0.8, 0.88]],
+    'Λ': [[0.15, 2.25, 0.5, 0.75, 0.85, 2.25]], 'Θ': [arc(0.5, 1.5, 0.32, 0.75, -PI / 2, 1.5 * PI, 16), [0.32, 1.5, 0.68, 1.5]],
+    '∠': [[0.85, 0.95, 0.15, 2.0, 0.88, 2.0]], '⊥': [[0.5, 0.85, 0.5, 2.0], [0.15, 2.0, 0.85, 2.0]], '∥': [[0.38, 0.8, 0.38, 2.2], [0.62, 0.8, 0.62, 2.2]],
+    '≅': [[0.22, 1.22, 0.35, 1.1, 0.5, 1.18, 0.65, 1.26, 0.78, 1.13], [0.25, 1.5, 0.78, 1.5], [0.25, 1.75, 0.78, 1.75]],
+    '∼': [[0.22, 1.55, 0.35, 1.42, 0.5, 1.5, 0.65, 1.58, 0.78, 1.45]], '≡': [[0.25, 1.28, 0.78, 1.28], [0.25, 1.5, 0.78, 1.5], [0.25, 1.72, 0.78, 1.72]],
+    '⊂': [[0.8, 1.05, 0.45, 1.05, 0.28, 1.2, 0.22, 1.5, 0.28, 1.8, 0.45, 1.95, 0.8, 1.95]],
+    '⊆': [[0.8, 0.95, 0.45, 0.95, 0.28, 1.08, 0.22, 1.35, 0.28, 1.62, 0.45, 1.75, 0.8, 1.75], [0.22, 2.0, 0.8, 2.0]],
+    '⊃': [[0.2, 1.05, 0.55, 1.05, 0.72, 1.2, 0.78, 1.5, 0.72, 1.8, 0.55, 1.95, 0.2, 1.95]],
+    '∪': [[0.25, 1.0, 0.25, 1.6, 0.35, 1.88, 0.5, 1.97, 0.65, 1.88, 0.75, 1.6, 0.75, 1.0]],
+    '∩': [[0.25, 2.0, 0.25, 1.4, 0.35, 1.12, 0.5, 1.03, 0.65, 1.12, 0.75, 1.4, 0.75, 2.0]],
+    '∅': [arc(0.5, 1.45, 0.28, 0.4, 0, 2 * PI, 14), [0.8, 0.85, 0.2, 2.05]],
+    '∀': [[0.15, 0.75, 0.5, 2.25, 0.85, 0.75], [0.3, 1.45, 0.7, 1.45]], '∃': [[0.2, 0.75, 0.8, 0.75, 0.8, 2.25, 0.2, 2.25], [0.3, 1.5, 0.8, 1.5]],
+    '∉': [[0.78, 1.08, 0.48, 1.08, 0.3, 1.2, 0.24, 1.5, 0.3, 1.8, 0.48, 1.92, 0.78, 1.92], [0.26, 1.5, 0.7, 1.5], [0.66, 0.95, 0.38, 2.05]],
+    '⇔': [[0.25, 1.4, 0.75, 1.4], [0.25, 1.6, 0.75, 1.6], [0.34, 1.22, 0.1, 1.5, 0.34, 1.78], [0.66, 1.22, 0.9, 1.5, 0.66, 1.78]],
+    '↔': [[0.12, 1.5, 0.88, 1.5], [0.32, 1.32, 0.12, 1.5, 0.32, 1.68], [0.68, 1.32, 0.88, 1.5, 0.68, 1.68]],
+    '⇐': [[0.2, 1.4, 0.88, 1.4], [0.2, 1.6, 0.88, 1.6], [0.34, 1.22, 0.1, 1.5, 0.34, 1.78]],
+    '↦': [[0.12, 1.5, 0.88, 1.5], [0.68, 1.32, 0.88, 1.5, 0.68, 1.68], [0.12, 1.35, 0.12, 1.65]],
+    '∴': [[0.49, 1.2, 0.51, 1.22], [0.24, 1.93, 0.26, 1.95], [0.74, 1.93, 0.76, 1.95]], '∵': [[0.24, 1.2, 0.26, 1.22], [0.74, 1.2, 0.76, 1.22], [0.49, 1.93, 0.51, 1.95]],
+    '□': [[0.25, 1.0, 0.75, 1.0, 0.75, 2.0, 0.25, 2.0, 0.25, 1.0]],
+    '∝': [[0.85, 1.25, 0.7, 1.22, 0.5, 1.5, 0.32, 1.75, 0.18, 1.65, 0.18, 1.35, 0.32, 1.25, 0.5, 1.5, 0.7, 1.78, 0.85, 1.75]],
   };
   const SYNTH_V = {};
   const synth = ch => SYNTH[ch] ? (SYNTH_V[ch] || (SYNTH_V[ch] = { s: SYNTH[ch] })) : null;
@@ -462,7 +495,16 @@
   const MSYM = { cdot: '·', times: '×', div: '÷', pm: '±', mp: '∓', le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', approx: '≈',
     infty: '∞', pi: 'π', theta: 'θ', alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', Delta: 'Δ', lambda: 'λ', mu: 'μ', sigma: 'σ', Sigma: 'Σ', sum: 'Σ',
     to: '→', rightarrow: '→', Rightarrow: '⇒', implies: '⇒', in: '∈', ldots: '…', dots: '…', cdots: '…', circ: '°', degree: '°', lt: '<', gt: '>',
-    '{': '{', '}': '}', '%': '%', $: '$', '#': '#', '&': '&', _: '_', '|': '|', lbrace: '{', rbrace: '}', vert: '|', mid: '|' };
+    '{': '{', '}': '}', '%': '%', $: '$', '#': '#', '&': '&', _: '_', '|': '|', lbrace: '{', rbrace: '}', vert: '|', mid: '|',
+    int: '∫', oint: '∮', partial: '∂', nabla: '∇', prod: 'Π', epsilon: 'ε', varepsilon: 'ε', omega: 'ω', Omega: 'Ω', phi: 'φ', varphi: 'φ', Phi: 'Φ',
+    rho: 'ρ', tau: 'τ', eta: 'η', zeta: 'ζ', xi: 'ξ', psi: 'ψ', chi: 'χ', kappa: 'κ', nu: 'ν', Gamma: 'Γ', Lambda: 'Λ', Pi: 'Π', Theta: 'Θ', vartheta: 'θ',
+    angle: '∠', triangle: '△', perp: '⊥', parallel: '∥', Vert: '∥', cong: '≅', sim: '∼', equiv: '≡', subset: '⊂', subseteq: '⊆', supset: '⊃', cup: '∪', cap: '∩',
+    emptyset: '∅', varnothing: '∅', forall: '∀', exists: '∃', neg: '¬', lnot: '¬', notin: '∉', Leftrightarrow: '⇔', iff: '⇔', leftrightarrow: '↔',
+    leftarrow: '←', gets: '←', Leftarrow: '⇐', mapsto: '↦', ell: 'ℓ', prime: '′', therefore: '∴', because: '∵', propto: '∝', bullet: '•', ast: '*', colon: ':',
+    langle: '<', rangle: '>', lvert: '|', rvert: '|', lceil: '[', rceil: ']', lfloor: '[', rfloor: ']', star: '*', square: '□', setminus: '\\', backslash: '\\' };
+  const NOOP = /^(displaystyle|textstyle|scriptstyle|scriptscriptstyle|limits|nolimits|nonumber|notag|[Bb]igg?[lrm]?|middle|quad\*|hline|centering)$/;
+  const ACC = /^(vec|hat|widehat|bar|overline|underline|tilde|widetilde|dot|ddot|overrightarrow|overleftarrow|check)$/;
+  const BRK = { pmatrix: '()', bmatrix: '[]', Bmatrix: '{}', vmatrix: '||', Vmatrix: '∥∥', cases: '{.', dcases: '{.' };
   const MSPACE = { ',': 0.17, ':': 0.22, ';': 0.28, ' ': 0.33, '\\': 0.33, quad: 1, qquad: 2, '!': 0 };
   const FN = new Set(['sin', 'cos', 'tan', 'cot', 'sec', 'csc', 'log', 'ln', 'lim', 'max', 'min', 'exp']);
   // LaTeX math -> tree: row{a}, ch{c}, txt{s}, sp{w}, scr{b, sup, sub}, frac{n, d}, sqrt{b, ix}, lr{l, r, b}
@@ -481,8 +523,24 @@
       if (/^[dt]?frac$/.test(n)) return { t: 'frac', n: arg(), d: arg() };
       if (n === 'sqrt') { ws(); let ix = null; if (s[i] === '[') { i++; ix = row(']'); i++; } return { t: 'sqrt', b: arg(), ix }; }
       if (/^(text|textrm|textbf|mathrm|mbox|operatorname)$/.test(n)) return { t: 'txt', s: raw() };
-      if (/^(mathbf|mathit|boldsymbol|mathsf|bm)$/.test(n)) return arg(); // styles: the hand writes them the same
-      if (n === 'begin' || n === 'end') { raw(); return null; }
+      if (/^(mathbf|mathit|boldsymbol|mathsf|bm|mathbb|mathcal|mathfrak|mathscr|boxed|textit|emph|underbrace|overbrace)$/.test(n)) return arg(); // styles: the hand writes them the same; shortcut: \boxed draws no box
+      if (NOOP.test(n)) return null;
+      if (n === 'tag') return { t: 'txt', s: '(' + raw() + ')' };
+      if (ACC.test(n)) return { t: 'acc', k: n, b: arg() };
+      if (n === 'begin') { // matrix / cases / aligned: \\ = next row, & = next cell
+        const nm = raw().replace('*', ''); if (nm === 'array') raw(); // column spec
+        const rows = []; let cells = [];
+        for (;;) {
+          cells.push(row(['&', '\\\\', '\\end'])); ws();
+          if (s[i] === '&') { i++; continue; }
+          if (cells.some(c => c.a.length)) rows.push(cells); cells = [];
+          if (s.startsWith('\\\\', i)) { i += 2; ws(); if (s[i] === '[') i = Math.max(i + 1, s.indexOf(']', i) + 1); continue; } // \\[2pt]
+          if (s.startsWith('\\end', i)) { i += 4; raw(); }
+          break;
+        }
+        return { t: 'env', name: nm, rows };
+      }
+      if (n === 'end') { raw(); return null; }
       if (n === 'left') { const l = delim(), b = row('\\right'); let r = '.'; if (s.startsWith('\\right', i)) { i += 6; r = delim(); } return { t: 'lr', l, r, b }; }
       if (n === 'right') return null;
       if (MSPACE.hasOwnProperty(n)) return { t: 'sp', w: MSPACE[n] };
@@ -491,9 +549,9 @@
       return n ? { t: 'txt', s: n } : null; // unknown command: write its name
     }
     function row(end) {
-      const a = [];
+      const a = [], E = end == null ? [] : [].concat(end);
       for (;;) {
-        ws(); if (i >= s.length || (end && s.startsWith(end, i))) break;
+        ws(); if (i >= s.length || E.some(e => s.startsWith(e, i))) break;
         if (s[i] === '^' || s[i] === '_') {
           const k = s[i++] === '^' ? 'sup' : 'sub'; let b = a.pop() || { t: 'row', a: [] };
           if (b.t !== 'scr' || b[k]) b = { t: 'scr', b };
@@ -508,6 +566,12 @@
   // Pasted text -> ['\n' | {t:'txt', s, bold} | {t:'math', node}]. Markdown from AI chats: **bold**, __bold__, # headings, * / - / + bullets.
   function rich(text) {
     const B0 = '\u0001', B1 = '\u0002'; // bold on / off
+    // v19: text copied from rendered math: invisible marks, odd spaces, math-italic letters (𝑥 has no glyph anywhere), x² / a₁
+    const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ', SUPA = '0123456789+-=()ni', SUB = '₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎', SUBA = '0123456789+-=()';
+    text = text.replace(/[​-‍⁠-⁤﻿￼]/g, '').replace(/[  -  ]/g, ' ').replace(/−/g, '-')
+      .replace(/\uD835[\uDC00-\uDFFF]|ℎ/g, c => c.normalize('NFKC'))
+      .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ]+/g, t => '^{' + [...t].map(c => SUPA[SUP.indexOf(c)]).join('') + '}')
+      .replace(/[₀-₎]+/g, t => '_{' + [...t].map(c => SUBA[SUB.indexOf(c)]).join('') + '}');
     text = text.replace(/\r/g, '').split('\n').map(l => {
       l = l.replace(/^(\s*)[*+-]\s+/, '$1• ');
       const h = l.match(/^\s*#{1,6}\s+(.*)$/); if (h) l = B0 + h[1] + B1;
@@ -528,12 +592,14 @@
     };
     const lineStart = () => { const e = out[out.length - 1]; return !e || e === '\n' || (e.t === 'txt' && /\n\s*$/.test(e.s)); };
     // $..$ needs no space just inside and no digit right after, so "$5 and $6" stays money
-    const re = /\\\$|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*[^\s$])?)\$(?!\d)/g;
+    const re = /\\\$|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*[^\s$])?)\$(?!\d)|\$\s+([^$\n]*[\\^_={][^$\n]*?)\s*\$(?!\d)/g; // last: "$ x^2 $" spaced, only when it looks like math
     let last = 0, m;
     while ((m = re.exec(text))) {
       txt(text.slice(last, m.index)); last = re.lastIndex;
       if (m[0] === '\\$') { out.push({ t: 'txt', s: '$', bold }); continue; }
-      const disp = m[1] != null || m[2] != null, node = mathParse(m[1] ?? m[2] ?? m[3] ?? m[4]);
+      // $$..$$ mid-sentence is inline (Claude's copy button writes inline math that way); alone on its line it is display
+      const lineAlone = !text.slice(text.lastIndexOf('\n', m.index - 1) + 1, m.index).trim() && !/^[^\n]*/.exec(text.slice(last))[0].trim();
+      const disp = m[2] != null || (m[1] != null && lineAlone), node = mathParse(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]);
       if (disp && !lineStart()) out.push('\n');
       out.push({ t: 'math', node, bold });
       if (disp && !/^\s*\n/.test(text.slice(last))) out.push('\n');
@@ -612,7 +678,7 @@
     let rf = null;
     if (v.s && refs) {
       const [, st, i] = refs.out[refChoose(refs, R, sty)];
-      rf = { d: mold(v, st, i), a: 0.18 + 0.24 * R(), font: !HANDY.has(REFS.j.refs[i].kind) };
+      rf = { d: mold(v, st, i, refs.v), a: 0.18 + 0.24 * R(), font: !HANDY.has(REFS.j.refs[i].kind) };
     }
     const t = Math.min(Math.max(0.3 + 0.5 * (R() + R() - 1) - 0.1 * fast - (rf ? 0.5 * rf.a : 0), 0), 0.8); // pull toward typed: 0 = as drawn, today's look 0.3; person, typed and mold share the letter
     const ky = 0.32 * u(), kx = 0.32 * u(), kt = 0.16 * u(), kl = 0.15 * u(), sh = src.map(() => [0.022 * u(), 0.022 * u()]);
@@ -828,33 +894,51 @@
       const Q = []; ink({ s: fitBox(st, b) }, (x, y) => Q.push(x, y), 0.04);
       const e = w * Math.exp(-(near(P, Q) + near(Q, P)) / 2 / 0.07); if (e > 1e-4) { out.push([e, st, i]); tot += e; }
     }
-    const c = out.length ? { tot, out } : null; RW.set(v, c); return c;
+    const c = out.length ? { tot, out, v } : null; RW.set(v, c); return c; // v: the stored version, for mold()
   }
   function refChoose(refs, R, sty) { // which look-alike reference this copy molds into: this sheet's hands ×5, kind by neatness
     const neat = sty ? sty.neat : 1, ws = refs.out.map(([e, , i]) => e * refKindMul(i, neat) * (sty && sty.hands.has(i) ? 5 : 1));
-    let x = R() * ws.reduce((a, b) => a + b, 0), j = ws.findIndex(w => (x -= w) <= 0); return j < 0 ? ws.length - 1 : j;
+    const pick = (r, w) => { let x = r * w.reduce((a, b) => a + b, 0), j = w.findIndex(q => (x -= q) <= 0); return j < 0 ? w.length - 1 : j; };
+    if (!sty || !sty.pool) return pick(R(), ws);
+    // v19: one box draws each letter from a pool of up to 8 references (picked by the same weights), so a long paste
+    // works out at most 8 bends per letter instead of one per copy; other boxes and seeds get other pools
+    let pool = sty.pool.get(refs);
+    if (!pool) { const w = ws.slice(); pool = []; for (let k = 0; k < Math.min(8, w.length); k++) { const j = pick(sty.pr(), w); pool.push(j); w[j] = 0; } sty.pool.set(refs, pool); }
+    return pool[pick(R(), pool.map(j => ws[j]))];
   }
   // Mold: one smooth bend that lays the drawn letter into a reference letter fitted to its box. Per point of v.s, full strength;
   // a copy takes a fraction of it, so the reference's proportions and curves come through while the person's pen detail rides along.
   const MOLD = new WeakMap();
-  function mold(v, st, ri) {
+  // v19: the bend is worked out once per stored version + reference (base); blended copies of two versions just look it up
+  const MOLDF = new WeakMap();
+  function mold(v, st, ri, base = v) {
     let c = MOLD.get(v); if (!c) MOLD.set(v, c = {}); if (c[ri]) return c[ri];
+    let f = MOLDF.get(base); if (!f) MOLDF.set(base, f = {});
+    const F = f[ri] || (f[ri] = moldField(base, st));
+    return c[ri] = v.s.map(a => { const o = new Array(a.length); for (let i = 0; i < a.length; i += 2) { F(a[i], a[i + 1], o, i); } return o; });
+  }
+  function moldField(v, st) {
     const P0 = [], Q = []; ink(v, (x, y) => P0.push(x, y), 0.04); ink({ s: fitBox(st, bbox(v)) }, (x, y) => Q.push(x, y), 0.04);
     const n = P0.length / 2, m = Q.length / 2, P = P0.slice(), dx = new Float64Array(n), dy = new Float64Array(n), cn = new Float64Array(n);
     const nearest = (X, k, Y, ny) => { let b = 0, bd = Infinity; for (let j = 0; j < ny; j++) { const d = (Y[2 * j] - X[2 * k]) ** 2 + (Y[2 * j + 1] - X[2 * k + 1]) ** 2; if (d < bd) { bd = d; b = j; } } return b; };
-    const field = (x, y, sg, fx, fy) => { let sx = 0, sy = 0, sw = 0; for (let k = 0; k < n; k++) { const w = Math.exp(-((x - P[2 * k]) ** 2 + (y - P[2 * k + 1]) ** 2) / (2 * sg * sg)); sx += w * fx[k]; sy += w * fy[k]; sw += w; } return [sx / sw, sy / sw]; };
+    let ox = 0, oy = 0; const mx = new Float64Array(n), my = new Float64Array(n);
+    const field = (x, y, sg, fx, fy) => { // Gaussian mean move into ox/oy; points past 4σ weigh < 3.4e-4 and are skipped (v19 speed)
+      const c = 1 / (2 * sg * sg), cut = 16 * sg * sg; let sx = 0, sy = 0, sw = 0;
+      for (let k = 0; k < n; k++) { const ex = x - P[2 * k], ey = y - P[2 * k + 1], d = ex * ex + ey * ey; if (d > cut) continue; const w = Math.exp(-d * c); sx += w * fx[k]; sy += w * fy[k]; sw += w; }
+      ox = sw ? sx / sw : 0; oy = sw ? sy / sw : 0;
+    };
     for (let r = 0; r < 12; r++) {
       dx.fill(0); dy.fill(0); cn.fill(0);
       for (let k = 0; k < n; k++) { const j = nearest(P, k, Q, m); dx[k] += Q[2 * j] - P[2 * k]; dy[k] += Q[2 * j + 1] - P[2 * k + 1]; cn[k]++; } // drawn ink goes to the mold
       for (let j = 0; j < m; j++) { const k = nearest(Q, j, P, n); dx[k] += Q[2 * j] - P[2 * k]; dy[k] += Q[2 * j + 1] - P[2 * k + 1]; cn[k]++; } // every part of the mold gets filled
       for (let k = 0; k < n; k++) { dx[k] /= cn[k]; dy[k] /= cn[k]; }
-      const sg = 0.2 * Math.pow(0.3, r / 11), mv = []; // broad bends first, then finer: 0.2 -> 0.06
-      for (let k = 0; k < n; k++) mv.push(field(P[2 * k], P[2 * k + 1], sg, dx, dy));
-      for (let k = 0; k < n; k++) { P[2 * k] += 0.7 * mv[k][0]; P[2 * k + 1] += 0.7 * mv[k][1]; }
+      const sg = 0.2 * Math.pow(0.3, r / 11); // broad bends first, then finer: 0.2 -> 0.06
+      for (let k = 0; k < n; k++) { field(P[2 * k], P[2 * k + 1], sg, dx, dy); mx[k] = ox; my[k] = oy; }
+      for (let k = 0; k < n; k++) { P[2 * k] += 0.7 * mx[k]; P[2 * k + 1] += 0.7 * my[k]; }
     }
     for (let k = 0; k < n; k++) { dx[k] = P[2 * k] - P0[2 * k]; dy[k] = P[2 * k + 1] - P0[2 * k + 1]; }
     for (let k = 0; k < 2 * n; k++) P[k] = P0[k]; // the total bend, looked up where the drawn points started
-    return c[ri] = v.s.map(a => { const o = new Array(a.length); for (let i = 0; i < a.length; i += 2) { const [fx, fy] = field(a[i], a[i + 1], 0.08, dx, dy); o[i] = fx; o[i + 1] = fy; } return o; });
+    return (x, y, o, i) => { field(x, y, 0.08, dx, dy); o[i] = ox; o[i + 1] = oy; };
   }
 
   // o: {x, y, width, u (page units per box unit), gap (line height in box units), seed, fb, thick, neat (0 natural .. 1 neat, default 1)}
@@ -863,7 +947,7 @@
     const mess = 0.8 - 0.6 * neat; // how far letters stray off the line: neat = 0.2x the old wobble, natural = 0.8x
     const J = a => (R() - 0.5) * 2 * a * mess;
     const vr = 1 - 0.5 * neat, u = () => R() * 2 - 1, V = a => u() * a * vr; // how much copies differ: neat half, natural full
-    const sty = REFS ? { hands: styleHands(rng((o.seed || 1) * 7919 + 3), neat), neat } : null; // this sheet's reference hands
+    const sty = REFS ? { hands: styleHands(rng((o.seed || 1) * 7919 + 3), neat), neat, pool: new Map(), pr: rng((o.seed || 1) * 7919 + 11) } : null; // this sheet's reference hands
     // The writer drifts instead of jumping: size, speed and lean wander letter to letter (each about ±1, ~5-letter memory).
     // Faster = wider, leaning more, rounder, looser, spaced wider; the hand loosens a little line by line.
     const W = { sz: 0, fast: 0, ln: 0 }, cl2 = x => Math.min(Math.max(x, -2), 2);
@@ -1005,6 +1089,37 @@
             if (n.ix) { const ib = box(n.ix, Math.max(k * 0.5, 0.4)); its.push(...at(ib, 0, -0.55 * k)); }
             return B(its, x0 + b.w + 0.2 * k, top + 0.05 * k, bot);
           }
+          case 'acc': { // a small pen mark over (or under) what it holds
+            const b = box(n.b, k), x0 = 0.04 * k, w = Math.max(b.w - 0.1 * k, 0.3 * k), xm = x0 + w / 2, K = n.k, its = [...b.its];
+            const mark = pts => its.push({ it: rule(pts, k), ox: 0, oy: 0 });
+            if (K === 'underline') { const y = Math.max(b.desc, 0) + 0.12 * k; mark([x0, y, x0 + w, y + V(0.02)]); return B(its, b.w, b.asc, y + 0.05 * k); }
+            const y = -Math.max(b.asc, 0.75 * k) - 0.14 * k, hw = /wide/.test(K) ? w / 2 : Math.min(w / 2, 0.16 * k), a = 0.09 * k;
+            if (/vec|rightarrow/.test(K)) { mark([x0, y, x0 + w, y]); mark([x0 + w - a, y - a, x0 + w, y, x0 + w - a, y + a]); }
+            else if (/leftarrow/.test(K)) { mark([x0, y, x0 + w, y]); mark([x0 + a, y - a, x0, y, x0 + a, y + a]); }
+            else if (/hat/.test(K)) mark([xm - hw, y + 0.06 * k, xm, y - 0.08 * k, xm + hw, y + 0.06 * k]);
+            else if (K === 'check') mark([xm - hw, y - 0.08 * k, xm, y + 0.06 * k, xm + hw, y - 0.08 * k]);
+            else if (/tilde/.test(K)) mark([xm - hw, y + 0.03 * k, xm - hw / 2, y - 0.05 * k, xm, y, xm + hw / 2, y + 0.05 * k, xm + hw, y - 0.03 * k]);
+            else if (K === 'dot') mark([xm, y, xm + 0.02 * k, y + 0.02 * k]);
+            else if (K === 'ddot') { mark([xm - 0.1 * k, y, xm - 0.08 * k, y + 0.02 * k]); mark([xm + 0.1 * k, y, xm + 0.12 * k, y + 0.02 * k]); }
+            else mark(K === 'bar' ? [xm - hw, y, xm + hw, y] : [x0, y, x0 + w, y + V(0.02)]); // bar / overline
+            return B(its, b.w, -y + 0.12 * k, b.desc);
+          }
+          case 'env': { // rows stacked round the math axis like a fraction; cells side by side
+            const rows = n.rows.map(r => r.map(c => box(c, k))), nc = Math.max(1, ...rows.map(r => r.length)), gx = 1.0 * k, rg = 0.3 * k;
+            const cw = [...Array(nc)].map((_, j) => Math.max(0, ...rows.map(r => (r[j] ? r[j].w : 0))));
+            const left = /cases|align|split|flalign/.test(n.name), hs = rows.map(r => [Math.max(0.75 * k, ...r.map(c => c.asc)), Math.max(0.2 * k, ...r.map(c => c.desc))]);
+            const tot = hs.reduce((t, [a, d]) => t + a + d, 0) + rg * Math.max(0, rows.length - 1), top = -0.5 * k - tot / 2, its = [];
+            let y = top;
+            rows.forEach((r, ri) => {
+              const base = y + hs[ri][0]; let x = 0;
+              r.forEach((c, j) => { its.push(...at(c, x + (left ? 0 : (cw[j] - c.w) / 2), base)); x += cw[j] + gx; });
+              y = base + hs[ri][1] + rg;
+            });
+            const body = B(its, cw.reduce((t, w) => t + w, 0) + gx * (nc - 1), -top, y - rg), br = BRK[n.name];
+            if (!br) return join([sp(0.1 * k), body, sp(0.1 * k)]);
+            const t2 = body.asc + 0.1 * k, b2 = body.desc + 0.1 * k;
+            return join([stretch(br[0], k, t2, b2), sp(0.1 * k), body, sp(0.1 * k), stretch(br[1], k, t2, b2)]);
+          }
           case 'lr': {
             const b = box(n.b, k);
             if (b.asc + b.desc <= 1.7 * k) return join([n.l === '.' ? sp(0) : glyphs(n.l, k), b, n.r === '.' ? sp(0) : glyphs(n.r, k)]);
@@ -1110,10 +1225,17 @@
     t('**bold** loses its stars and is bold', kinds('ก **ข** ค') === 'txt:ก |txt!:ข|txt: ค', kinds('ก **ข** ค'));
     t('* and # lines: bullet and bold heading', kinds('* ก\n## ข') === 'txt:• ก\n|txt!:ข' , kinds('* ก\n## ข'));
     t('bold words get a heavier pen', LO('-').pens[0][0] * 1.5 < LO('**-**').pens[0][0]);
-    t('$..$, \\(..\\), a_n and $$..$$ are math; $5 and $6 is money', kinds('$x$ \\(y\\) a_n') === 'math|txt: |math|txt: |math' && kinds('$5 and $6') === 'txt:$5 and $6' && kinds('a $$x$$ b') === 'txt:a |NL|math|NL|txt: b', kinds('a $$x$$ b'));
+    t('$..$, \\(..\\), a_n and $$..$$ are math; $5 and $6 is money', kinds('$x$ \\(y\\) a_n') === 'math|txt: |math|txt: |math' && kinds('$5 and $6') === 'txt:$5 and $6' && kinds('a\n$$x$$\nb') === 'txt:a\n|math|txt:\nb', kinds('a\n$$x$$\nb'));
+    // v19: Claude's copy writes inline math as $$..$$; spaced "$ x^2 $"; highlight-copied math letters; matrices; new commands
+    t('$$..$$ mid-sentence is inline, "$ x^2 $" is math', kinds('a $$x$$ b') === 'txt:a |math|txt: b' && kinds('$ x^2 $ ok') === 'math|txt: ok' && kinds('$ 5 and $') === 'txt:$ 5 and $', kinds('a $$x$$ b') + ' / ' + kinds('$ x^2 $ ok'));
+    t('copied math letters and marks become plain', kinds('\u{1D465}²⁡ −y') === 'math|txt: -y', kinds('\u{1D465}²⁡ −y'));
     const mp = s => JSON.stringify(mathParse(s));
     t('LaTeX parse: frac, sqrt, scripts, \\left', mp('\\frac{1}{2}') === '{"t":"row","a":[{"t":"frac","n":{"t":"row","a":[{"t":"ch","c":"1"}]},"d":{"t":"row","a":[{"t":"ch","c":"2"}]}}]}'
       && /"t":"scr".*"sup".*"sub"|"t":"scr".*"sub".*"sup"/.test(mp('x_1^2')) && /"t":"lr","l":"\(","r":"\)"/.test(mp('\\left(x\\right)')) && /"t":"sqrt"/.test(mp('\\sqrt[3]{8}')) && mp('\\foo') === '{"t":"row","a":[{"t":"txt","s":"foo"}]}', mp('x_1^2'));
+    t('matrix rows, accents, no-op commands', /"t":"env","name":"pmatrix","rows":\[\[.*\],\[.*\]\]/.test(mp('\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}')) && /"t":"acc","k":"vec"/.test(mp('\\vec{v}'))
+      && mp('\\displaystyle x') === '{"t":"row","a":[{"t":"ch","c":"x"}]}' && mp('\\mathbb{R}') === '{"t":"row","a":[{"t":"row","a":[{"t":"ch","c":"R"}]}]}', mp('\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}'));
+    { const miss = Object.values(MSYM).filter(c => c.length === 1 && !SYNTH[c] && !(fb && fb(c))); t('every math symbol has a pen shape or a font glyph', !miss.length, miss.join(' ')); }
+    { const A = LO('$\\begin{cases} x & 1 \\\\ y & 2 \\end{cases}$'), B = LO('$x$'); t('cases stack into rows (taller than a line)', A.height > B.height * 1.3, A.height.toFixed(2) + ' vs ' + B.height.toFixed(2)); }
     const ys = r => r.strokes.concat(r.fills).map(a => bbox({ s: [a] })), sub = ys(LO("$a_1$")), m1 = ys(LO("$a$"));
     t('subscript is smaller and lower', sub.length > m1.length && (() => { const a = sub[sub.length - 1]; return a.y1 - a.y0 < 0.8 * (m1[0].y1 - m1[0].y0) + 10 && a.y1 > m1[0].y1; })(), sub.map(b => b.y1.toFixed(1)).join(','));
     const fr = ys(LO('$\\frac{1}{2}$')), bar = fr.find(b => b.y1 - b.y0 < 2 && b.x1 - b.x0 > 3), ds = fr.filter(b => b !== bar).sort((a, b) => a.y0 - b.y0), num = ds[0], den = ds[ds.length - 1];

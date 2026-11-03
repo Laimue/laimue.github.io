@@ -26,10 +26,10 @@ const db = (() => {
   return { get: k => tx('readonly', s => s.get(k)), set: (k, v) => tx('readwrite', s => s.put(v, k)) };
 })();
 
-let hand = { v: 1, g: {} }, font = null, saveT;
+let hand = { v: 1, g: {} }, font = null, saveT, handGen = 0; // handGen: bumped whenever the letters change, so cached handwriting is redone
 const fbCache = {};
 const fb = ch => (ch in fbCache ? fbCache[ch] : (fbCache[ch] = font ? H.fontVariant(font, ch) : null));
-const saveHand = () => { clearTimeout(saveT); saveT = setTimeout(() => db.set('hand', hand).catch(() => toast('Could not save on this device — use ⋯ → Save my handwriting file.', 6000)), 300); };
+const saveHand = () => { handGen++; clearTimeout(saveT); saveT = setTimeout(() => db.set('hand', hand).catch(() => toast('Could not save on this device — use ⋯ → Save my handwriting file.', 6000)), 300); };
 
 // ---------- files in / out
 function validHand(o) { // trust boundary: a handwriting file someone picked
@@ -231,7 +231,20 @@ function progress() {
 // ---------- Worksheet screen
 let sheet = null, sel = null, down = null;
 const ink = { color: LS.get('color', '#1a1a1a'), thick: LS.get('thick', 1) };
-const lay = b => H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods });
+// v19: handwriting cached per box; only new text, size, look or letters lay it out again (slow on long text), a move just shifts the ink
+const layKey = b => [b.text, b.w, b.u, b.gap, b.seed, b.neat ?? 1, ink.thick, JSON.stringify(b.mods || null), handGen].join('\u0001');
+const lay = b => {
+  const key = layKey(b);
+  let c = b.lc;
+  if (!c || c.key !== key) c = b.lc = { key, x: b.x, y: b.y, r: H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods }) };
+  else if (c.x !== b.x || c.y !== b.y) { // pens hold the same arrays as strokes, so each point moves once
+    const dx = b.x - c.x, dy = b.y - c.y;
+    for (const a of [...c.r.strokes, ...c.r.fills]) for (let i = 0; i < a.length; i += 2) { a[i] += dx; a[i + 1] += dy; }
+    for (const q of c.r.cb) if (q) { q[0] += dx; q[1] += dy; q[2] += dx; q[3] += dy; }
+    c.x = b.x; c.y = b.y;
+  }
+  return c.r;
+};
 const pathD = (arrs, close) => arrs.map(a => {
   let s = 'M' + a[0].toFixed(2) + ' ' + a[1].toFixed(2) + (a.length === 2 ? 'l0.01 0' : '');
   for (let i = 2; i < a.length; i += 2) s += 'L' + a[i].toFixed(2) + ' ' + a[i + 1].toFixed(2);
@@ -361,9 +374,21 @@ function openEd() {
 function closeEd() {
   if (!ed) return;
   const { pg, box } = ed, t = $('#txt'); ed = null;
-  box.el.classList.remove('edit'); renderInk(pg);
-  if (box.text.trim()) { M.handover(box.el, t); M.writeOn(box.g, 1.5); }
+  box.el.classList.remove('edit'); $('#mathKeys').hidden = true; $('#mathBtn').setAttribute('aria-expanded', false);
+  const has = !!box.text.trim(), done = () => { box.el.classList.remove('busy'); renderInk(pg); if (has && box.g) M.writeOn(box.g, 1.5); };
+  if (has) M.handover(box.el, t);
+  // long text takes a moment to write: show "writing…" first (two frames so it paints) instead of a frozen screen
+  if (box.text.length > 120 && !(box.lc && box.lc.key === layKey(box))) { box.el.classList.add('busy'); requestAnimationFrame(() => requestAnimationFrame(done)); } else done();
   t.hidden = true; document.body.append(t); t.blur();
+}
+function mathKey(k) { // v19 math keys: write the LaTeX at the caret, wrapped in $..$ unless already in math; | = where the caret lands
+  if (!ed) openEd(); if (!ed) return;
+  const t = $('#txt'), s0 = t.selectionStart, s1 = t.selectionEnd, b = t.value.slice(0, s0).replace(/\\\$/g, ''); // \$ is a plain dollar
+  const inMath = (b.match(/\$\$/g) || []).length % 2 || (b.replace(/\$\$/g, '').match(/\$/g) || []).length % 2 || b.lastIndexOf('\\(') > b.lastIndexOf('\\)') || b.lastIndexOf('\\[') > b.lastIndexOf('\\]');
+  let tx = inMath || /^[\^_]\{/.test(k) ? k : '$' + k.replace(/ $/, '') + '$'; // x^{2} / a_{n} work outside $ too
+  const at = tx.indexOf('|'); tx = tx.replace('|', '');
+  t.setRangeText(tx, s0, s1, 'end'); if (at >= 0) t.setSelectionRange(s0 + at, s0 + at);
+  t.focus({ preventScroll: true }); t.dispatchEvent(new Event('input'));
 }
 function fitEd() { // typed text at the box's handwriting size, on screen pixels
   if (!ed) return;
@@ -571,6 +596,13 @@ function wire() {
   $('#ver').textContent = 'LaiMue version ' + H.VERSION;
   $('#shuf').onclick = () => { if (!sel) return; closeEd(); sel.box.seed = (Math.random() * 1e9) | 0; renderInk(sel.pg); M.writeOn(sel.box.g, 1.5); };
   $('#del').onclick = () => { if (sel) { sel.box.text = ''; select(null); } }; // an empty box is removed on close
+  const MK = [['a/b', '\\frac{|}{}'], ['x²', '^{|}'], ['xₙ', '_{|}'], ['√', '\\sqrt{|}'], ['ⁿ√', '\\sqrt[|]{}'], ['( )', '(|)'], ['±', '\\pm '], ['×', '\\times '], ['÷', '\\div '],
+    ['≤', '\\le '], ['≥', '\\ge '], ['≠', '\\ne '], ['≈', '\\approx '], ['π', '\\pi '], ['θ', '\\theta '], ['α', '\\alpha '], ['β', '\\beta '], ['Δ', '\\Delta '], ['Σ', '\\sum '], ['∞', '\\infty '], ['→', '\\to '], ['°', '^\\circ ']];
+  const mk = $('#mathKeys');
+  for (const [l, k] of MK) { const b = document.createElement('button'); b.textContent = l; b.dataset.k = k; b.setAttribute('aria-label', 'Insert ' + l); mk.append(b); }
+  $('#mathBtn').onclick = () => { mk.hidden = !mk.hidden; $('#mathBtn').setAttribute('aria-expanded', !mk.hidden); placeBar(); };
+  mk.addEventListener('mousedown', e => e.preventDefault()); // keep the keyboard and caret in the text
+  mk.addEventListener('click', e => { const b = e.target.closest('button'); if (b) mathKey(b.dataset.k); });
   const ios = navigator.maxTouchPoints > 1 && /iPad|iPhone|Macintosh/.test(navigator.userAgent);
   const standalone = navigator.standalone || matchMedia('(display-mode: standalone)').matches;
   if (ios && !standalone && !LS.get('hint', false)) $('#installHint').hidden = false;
@@ -583,7 +615,7 @@ async function runTests() { // open with ?test
   const doc = await PDFLib.PDFDocument.create(); doc.addPage([595, 420]);
   await openPdf('test.pdf', (await doc.save()).slice().buffer);
   const pg = sheet.pages[0], box = { x: 30, y: 30, w: 530, u: 12, gap: 2.4, seed: 7, text: 'สวัสดีครับ ปู่น้ำกั๊ก ญี่ปุ่น ฎุ เกียรติ ป้า ปี่ ศักดิ์ ฤดู ทำน้ำ\nLaiMue 123 ๑๒๓ (ทดสอบ) ภาษาไทยเป็นภาษาที่สวยงามมาก' };
-  hand = H.fakeHand(fb, 11, true); // messy fake person, only in memory (never saved)
+  hand = H.fakeHand(fb, 11, true); handGen++; // messy fake person, only in memory (never saved)
   for (const [y, neat] of [[150, 1], [250, 0]]) { const b = { x: 30, y, w: 530, u: 16, gap: 2.4, seed: 7, neat, text: (neat ? 'Neat: ' : 'Natural: ') + 'สวัสดี ทดสอบ ปู่น้ำกั๊ก' }; pg.boxes.push(b); addBoxEl(pg, b); }
   pg.boxes.push(box); addBoxEl(pg, box); renderInk(pg);
   let ok = false;
