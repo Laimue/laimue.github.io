@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 19; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 20; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -491,7 +491,7 @@
   }
 
   // ---------- v18: AI-paste cleanup + LaTeX
-  const BOLD = 1.8, OPS = '=+-<>×÷±∓≤≥≠≈→⇒∈';
+  const BOLD = 1.8, OPS = '=+-<>×÷±∓≤≥≠≈→⇒∈', BIGOP = 'ΣΠ∑∏∐⋃⋂⨁⨂', INTS = '∫∬∭∮';
   const MSYM = { cdot: '·', times: '×', div: '÷', pm: '±', mp: '∓', le: '≤', leq: '≤', ge: '≥', geq: '≥', ne: '≠', neq: '≠', approx: '≈',
     infty: '∞', pi: 'π', theta: 'θ', alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', Delta: 'Δ', lambda: 'λ', mu: 'μ', sigma: 'σ', Sigma: 'Σ', sum: 'Σ',
     to: '→', rightarrow: '→', Rightarrow: '⇒', implies: '⇒', in: '∈', ldots: '…', dots: '…', cdots: '…', circ: '°', degree: '°', lt: '<', gt: '>',
@@ -523,7 +523,8 @@
       if (/^[dt]?frac$/.test(n)) return { t: 'frac', n: arg(), d: arg() };
       if (n === 'sqrt') { ws(); let ix = null; if (s[i] === '[') { i++; ix = row(']'); i++; } return { t: 'sqrt', b: arg(), ix }; }
       if (/^(text|textrm|textbf|mathrm|mbox|operatorname)$/.test(n)) return { t: 'txt', s: raw() };
-      if (/^(mathbf|mathit|boldsymbol|mathsf|bm|mathbb|mathcal|mathfrak|mathscr|boxed|textit|emph|underbrace|overbrace)$/.test(n)) return arg(); // styles: the hand writes them the same; shortcut: \boxed draws no box
+      if (/^(mathbf|mathit|boldsymbol|mathsf|bm|mathbb|mathcal|mathfrak|mathscr|textit|emph|underbrace|overbrace)$/.test(n)) return arg(); // styles: the hand writes them the same
+      if (n === 'boxed') return { t: 'boxed', b: arg() };
       if (NOOP.test(n)) return null;
       if (n === 'tag') return { t: 'txt', s: '(' + raw() + ')' };
       if (ACC.test(n)) return { t: 'acc', k: n, b: arg() };
@@ -544,7 +545,7 @@
       if (n === 'left') { const l = delim(), b = row('\\right'); let r = '.'; if (s.startsWith('\\right', i)) { i += 6; r = delim(); } return { t: 'lr', l, r, b }; }
       if (n === 'right') return null;
       if (MSPACE.hasOwnProperty(n)) return { t: 'sp', w: MSPACE[n] };
-      if (FN.has(n)) return { t: 'txt', s: n };
+      if (FN.has(n)) return { t: 'txt', s: n, fn: 1 };
       if (MSYM.hasOwnProperty(n)) return { t: 'ch', c: MSYM[n] };
       return n ? { t: 'txt', s: n } : null; // unknown command: write its name
     }
@@ -568,7 +569,7 @@
     const B0 = '\u0001', B1 = '\u0002'; // bold on / off
     // v19: text copied from rendered math: invisible marks, odd spaces, math-italic letters (𝑥 has no glyph anywhere), x² / a₁
     const SUP = '⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ', SUPA = '0123456789+-=()ni', SUB = '₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎', SUBA = '0123456789+-=()';
-    text = text.replace(/[​-‍⁠-⁤﻿￼]/g, '').replace(/[  -  ]/g, ' ').replace(/−/g, '-')
+    text = text.replace(/&(amp|lt|gt|nbsp);/g, (_, e) => ({ amp: '&', lt: '<', gt: '>', nbsp: ' ' })[e]).replace(/[​-‍⁠-⁤﻿￼]/g, '').replace(/[  -  ]/g, ' ').replace(/−/g, '-')
       .replace(/\uD835[\uDC00-\uDFFF]|ℎ/g, c => c.normalize('NFKC'))
       .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱ]+/g, t => '^{' + [...t].map(c => SUPA[SUP.indexOf(c)]).join('') + '}')
       .replace(/[₀-₎]+/g, t => '_{' + [...t].map(c => SUBA[SUB.indexOf(c)]).join('') + '}');
@@ -583,25 +584,31 @@
         if (part === B0) { bold = true; continue; } if (part === B1) { bold = false; continue; }
         // shortcut: a_n / x^2 outside $ is math too (user's choice), so snake_case words get a subscript; add an escape if that bites
         let last = 0; const re = /([A-Za-z0-9)\]])((?:[_^](?:\{[^{}\n]*\}|\d+|[A-Za-z]))+)/g; let m;
+        const plain = s => out.push({ t: 'txt', s: s.replace(/\\([\\_*#~`[\]])/g, '$1'), bold }); // markdown escapes (a\_b, \*) are the plain character
         while ((m = re.exec(part))) {
-          if (m.index > last) out.push({ t: 'txt', s: part.slice(last, m.index), bold });
+          if (m.index > last) plain(part.slice(last, m.index));
           out.push({ t: 'math', node: mathParse(m[0]), bold }); last = re.lastIndex;
         }
-        if (last < part.length) out.push({ t: 'txt', s: part.slice(last), bold });
+        if (last < part.length) plain(part.slice(last));
       }
     };
     const lineStart = () => { const e = out[out.length - 1]; return !e || e === '\n' || (e.t === 'txt' && /\n\s*$/.test(e.s)); };
     // $..$ needs no space just inside and no digit right after, so "$5 and $6" stays money
-    const re = /\\\$|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*[^\s$])?)\$(?!\d)|\$\s+([^$\n]*[\\^_={][^$\n]*?)\s*\$(?!\d)/g; // last: "$ x^2 $" spaced, only when it looks like math
+    // first two: markdown-escaped copies write \\[ .. \\] and \\( .. \\)
+    const re = /\\\\\[([\s\S]+?)\\\\\]|\\\\\(([\s\S]+?)\\\\\)|\\\$|\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*[^\s$])?)\$(?!\d)|\$\s+([^$\n]*[\\^_={][^$\n]*?)\s*\$(?!\d)/g; // last: "$ x^2 $" spaced, only when it looks like math
     let last = 0, m;
     while ((m = re.exec(text))) {
       txt(text.slice(last, m.index)); last = re.lastIndex;
       if (m[0] === '\\$') { out.push({ t: 'txt', s: '$', bold }); continue; }
       // $$..$$ mid-sentence is inline (Claude's copy button writes inline math that way); alone on its line it is display
       const lineAlone = !text.slice(text.lastIndexOf('\n', m.index - 1) + 1, m.index).trim() && !/^[^\n]*/.exec(text.slice(last))[0].trim();
-      const disp = m[2] != null || (m[1] != null && lineAlone), node = mathParse(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5]);
+      const disp = m[1] != null || m[4] != null || (m[3] != null && lineAlone);
+      let src = m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5] ?? m[6] ?? m[7];
+      // markdown-escaped math: \_ -> _, \\, -> \, ; \\\\ -> the row break \\ and \\{ -> the brace \{
+      if (m[1] != null || m[2] != null || /\\[_*]/.test(src) || (/\\\\[,;:!]/.test(src) && !/\\begin/.test(src))) src = src.replace(/\\([\\_*[\]~])/g, '$1');
+      const node = mathParse(src);
       if (disp && !lineStart()) out.push('\n');
-      out.push({ t: 'math', node, bold });
+      out.push({ t: 'math', node, bold, disp });
       if (disp && !/^\s*\n/.test(text.slice(last))) out.push('\n');
     }
     txt(text.slice(last));
@@ -1039,7 +1046,7 @@
       }
     };
     // Math in the person's hand: boxes {its: [{it, ox, oy}], w, asc, desc}, units from the baseline (y down)
-    const mathGroup = (node, pw) => {
+    const mathGroup = (node, pw, disp) => {
       const sh = J(0.06), wz = 1 + V(0.03);
       const B = (its, w, asc, desc) => ({ its, w, asc, desc });
       const sp = w => B([], w, 0, 0);
@@ -1064,27 +1071,51 @@
         const its = sh0.map(a => ({ it: rule(a.map((v, i) => (i % 2 ? -top + (v - b.y0) / (b.y1 - b.y0) * h : 0.08 * k + (v - b.x0) * kx)), k), ox: 0, oy: 0 }));
         return B(its, (b.x1 - b.x0) * kx + 0.16 * k, top, bot);
       };
-      const box = (n, k) => {
+      // D = display style (own-line math): big Σ ∫, limits under/over Σ and lim, full-size fractions
+      const box = (n, k, D) => {
         switch (n.t) {
-          case 'row': return join(n.a.map(c => box(c, k)));
+          case 'row': return join(n.a.flatMap((c, j) => {
+            const p = n.a[j - 1], nx = n.a[j + 1];
+            if (c.t === 'ch' && '+-±∓'.includes(c.c) && (!p || (p.t === 'ch' && (OPS.includes(p.c) || '([{,|'.includes(p.c))))) return [glyphs(c.c, k)]; // a sign (-1, e^{-t}): no side spaces
+            const b = box(c, k, D);
+            return (c.fn || (c.t === 'scr' && c.b.fn)) && nx && nx.t !== 'sp' && !(nx.t === 'ch' && (OPS.includes(nx.c) || '([{|'.includes(nx.c))) ? [b, sp(0.17 * k)] : [b]; // \sin x: thin space after the name
+          }));
           case 'sp': return sp(n.w * k);
           case 'txt': return glyphs(n.s, k);
-          case 'ch': return OPS.includes(n.c) ? join([sp(0.22 * k), glyphs(n.c, k), sp(0.22 * k)]) : glyphs(n.c, k);
+          case 'ch': {
+            if (D && (BIGOP.includes(n.c) || INTS.includes(n.c))) { // big sign centred on the math axis
+              const g = glyphs(n.c, (INTS.includes(n.c) ? 1.7 : 1.45) * k), dy = -0.5 * k - (g.desc - g.asc) / 2;
+              return join([B(at(g, 0, dy), g.w, g.asc - dy, g.desc + dy), sp(0.08 * k)]);
+            }
+            return OPS.includes(n.c) ? join([sp(0.22 * k), glyphs(n.c, k), sp(0.22 * k)]) : glyphs(n.c, k);
+          }
           case 'scr': {
-            const b = box(n.b, k), sk = Math.max(k * 0.62, 0.42), up = n.sup && box(n.sup, sk), dn = n.sub && box(n.sub, sk), x = b.w;
+            const o = n.b, sk = Math.max(k * 0.62, 0.42), up = n.sup && box(n.sup, sk), dn = n.sub && box(n.sub, sk);
+            if (D && ((o.t === 'ch' && BIGOP.includes(o.c)) || (o.t === 'txt' && /^(lim|max|min)$/.test(o.s)))) { // limits written under and over
+              const b = box(o, k, D), W = Math.max(b.w, up ? up.w : 0, dn ? dn.w : 0), its = at(b, (W - b.w) / 2, 0); let asc = b.asc, desc = b.desc;
+              if (up) { const y = -b.asc - 0.1 * k - up.desc; its.push(...at(up, (W - up.w) / 2, y)); asc = up.asc - y; }
+              if (dn) { const y = b.desc + 0.1 * k + dn.asc; its.push(...at(dn, (W - dn.w) / 2, y)); desc = y + dn.desc; }
+              return B(its, W + 0.1 * k, asc, desc);
+            }
+            const b = box(o, k, D), x = b.w, tuck = D && o.t === 'ch' && INTS.includes(o.c) ? 0.25 * k : 0; // ∫: lower limit tucked under the curl
             const its = [...b.its]; let asc = b.asc, desc = b.desc, w = 0;
             if (up) { const y = -Math.max(0.55 * k, b.asc - 0.5 * up.asc); its.push(...at(up, x, y)); asc = Math.max(asc, up.asc - y); w = up.w; }
-            if (dn) { const y = Math.max(0.3 * k, b.desc - 0.3 * dn.asc, up ? 0.15 * k + dn.asc - 0.3 * k : 0); its.push(...at(dn, x, y)); desc = Math.max(desc, y + dn.desc); w = Math.max(w, dn.w); }
+            if (dn) { const y = Math.max(0.3 * k, b.desc - 0.3 * dn.asc, up ? 0.15 * k + dn.asc - 0.3 * k : 0); its.push(...at(dn, x - tuck, y)); desc = Math.max(desc, y + dn.desc); w = Math.max(w, dn.w - tuck); }
             return B(its, x + w, asc, desc);
           }
+          case 'boxed': { // a pen box round it, drawn in two strokes
+            const b = box(n.b, k, D), p = 0.2 * k, x0 = 0.05 * k, top = Math.max(b.asc, 0.8 * k) + p, bot = Math.max(b.desc, 0.25 * k) + p, x1 = x0 + b.w + 2 * p;
+            const its = [...at(b, x0 + p, 0), { it: rule([x0, -top, x1, -top + V(0.02), x1 + V(0.02), bot], k), ox: 0, oy: 0 }, { it: rule([x1, bot, x0, bot + V(0.02), x0 + V(0.02), -top], k), ox: 0, oy: 0 }];
+            return B(its, x1 + 0.1 * k, top + 0.05 * k, bot + 0.05 * k);
+          }
           case 'frac': {
-            const fk = Math.max(k * 0.8, 0.45), nb = box(n.n, fk), db = box(n.d, fk), W = Math.max(nb.w, db.w) + 0.15 * k, pd = 0.08 * k, ax = -0.5 * k;
+            const fk = D ? k : Math.max(k * 0.8, 0.45), nb = box(n.n, fk), db = box(n.d, fk), W = Math.max(nb.w, db.w) + 0.15 * k, pd = 0.08 * k, ax = -0.5 * k;
             const ny = ax - 0.16 * k - nb.desc, dy = ax + 0.16 * k + db.asc;
             const its = [...at(nb, pd + (W - nb.w) / 2, ny), ...at(db, pd + (W - db.w) / 2, dy), { it: rule([pd, ax, pd + W * 0.5, ax + V(0.02), pd + W, ax + V(0.03)], k), ox: 0, oy: 0 }];
             return B(its, W + 2 * pd, nb.asc - ny, dy + db.desc);
           }
           case 'sqrt': {
-            const b = box(n.b, k), top = Math.max(b.asc, k) + 0.22 * k, bot = Math.max(b.desc, 0) + 0.05 * k, x0 = 0.5 * k, its = at(b, x0 + 0.05 * k, 0);
+            const b = box(n.b, k, D), top = Math.max(b.asc, k) + 0.22 * k, bot = Math.max(b.desc, 0) + 0.05 * k, x0 = 0.5 * k, its = at(b, x0 + 0.05 * k, 0);
             its.push({ it: rule([0, -0.4 * k, 0.1 * k, -0.47 * k, 0.28 * k, bot, x0, -top, x0 + b.w + 0.1 * k, -top], k), ox: 0, oy: 0 });
             if (n.ix) { const ib = box(n.ix, Math.max(k * 0.5, 0.4)); its.push(...at(ib, 0, -0.55 * k)); }
             return B(its, x0 + b.w + 0.2 * k, top + 0.05 * k, bot);
@@ -1121,7 +1152,7 @@
             return join([stretch(br[0], k, t2, b2), sp(0.1 * k), body, sp(0.1 * k), stretch(br[1], k, t2, b2)]);
           }
           case 'lr': {
-            const b = box(n.b, k);
+            const b = box(n.b, k, D);
             if (b.asc + b.desc <= 1.7 * k) return join([n.l === '.' ? sp(0) : glyphs(n.l, k), b, n.r === '.' ? sp(0) : glyphs(n.r, k)]);
             const top = b.asc + 0.1 * k, bot = Math.max(b.desc, 0.3 * k) + 0.1 * k;
             return join([stretch(n.l, k, top, bot), b, stretch(n.r, k, top, bot)]);
@@ -1129,13 +1160,13 @@
         }
         return sp(0);
       };
-      const b = box(node, 1);
+      const b = box(node, 1, disp);
       return { grp: b.its, w: b.w, gap: 0.1, dk: 0, up: Math.max(0, b.asc - 1.3), down: Math.max(0, b.desc - 0.45) };
     };
     for (const S of rich(text)) {
       if (S === '\n') { newline(false); continue; }
       const pw0 = () => [0.93, 1, 1.07][(R() * 3) | 0] * (S.bold ? BOLD : 1);
-      if (S.t === 'math') { place([mathGroup(S.node, pw0())]); continue; }
+      if (S.t === 'math') { place([mathGroup(S.node, pw0(), S.disp)]); continue; }
       for (const seg of words(S.s)) {
       if (seg === '\n') { newline(false); continue; }
       const sh = J(0.06), wz = 1 + V(0.03), pw = pw0(); // each word: its own lean, a bit bigger or smaller, pen pressed softer or harder
@@ -1240,6 +1271,16 @@
     t('subscript is smaller and lower', sub.length > m1.length && (() => { const a = sub[sub.length - 1]; return a.y1 - a.y0 < 0.8 * (m1[0].y1 - m1[0].y0) + 10 && a.y1 > m1[0].y1; })(), sub.map(b => b.y1.toFixed(1)).join(','));
     const fr = ys(LO('$\\frac{1}{2}$')), bar = fr.find(b => b.y1 - b.y0 < 2 && b.x1 - b.x0 > 3), ds = fr.filter(b => b !== bar).sort((a, b) => a.y0 - b.y0), num = ds[0], den = ds[ds.length - 1];
     t('fraction: number over a bar over number', bar && num.y1 < bar.y0 && den.y0 > bar.y1, bar ? num.y1.toFixed(1) + ' < ' + bar.y0.toFixed(1) + ' < ' + den.y0.toFixed(1) : 'no bar');
+    // v20: markdown-escaped copies (\\[ .. \\], \_ , \\,), display limits, \boxed
+    { const e = rich('a \\\\[ x \\\\] b'), ms = e.filter(x => x.t === 'math');
+      t('escaped \\\\[ .. \\\\] is display math, no stray \\', ms.length === 1 && ms[0].disp && !e.some(x => x.t === 'txt' && x.s.includes('\\')), kinds('a \\\\[ x \\\\] b')); }
+    { const j = JSON.stringify(rich('\\\\( x\\_{0} \\\\)')[0].node); t('\\_ is a subscript', /"t":"scr".*"sub"/.test(j), j); }
+    { const j = JSON.stringify(rich('\\\\[ a\\\\,b \\\\]').find(x => x.t === 'math').node); t('\\\\, is a thin space, not a comma', /"t":"sp"/.test(j) && !/"c":","/.test(j), j); }
+    t('&amp; &lt; are decoded', kinds('a &amp; b &lt; c') === 'txt:a & b < c', kinds('a &amp; b &lt; c'));
+    { const iw = r => { const b = ys(r); return Math.max(...b.map(q => q.x1)) - Math.min(...b.map(q => q.x0)); };
+      const sD = iw(LO('\\[\\sum_{n=1}^{9}\\]')), sI = iw(LO('$\\sum_{n=1}^{9}$')), iD = iw(LO('\\[\\int_{0}^{9}\\]')), i0 = iw(LO('\\[\\int\\]'));
+      t('display: Σ limits under/over, ∫ limits beside', sD < sI * 0.85 && iD > i0 + 3, 'Σ ' + sD.toFixed(1) + ' vs ' + sI.toFixed(1) + ', ∫ ' + iD.toFixed(1) + ' vs ' + i0.toFixed(1)); }
+    t('\\boxed draws a pen box', LO('$\\boxed{x}$').strokes.length >= LO('$x$').strokes.length + 2);
     t('a fraction pushes the next line down', LO('$\\frac{1}{2}$\nก').height > LO('ก\nก').height + 2);
     const miss = [...GROUPS[5][1] + GROUPS[8][1]].filter(ch => !variantsFor(null, ch, fb, null).length);
     t('every Teach symbol can be written untaught', !miss.length, miss.join(''));
