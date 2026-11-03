@@ -68,8 +68,10 @@
 <section id="teach" hidden>
   <div class="t-head">
     <h1 class="kin" id="teachTitle">Teach your <em>hand.</em></h1>
-    <div class="hud"><span id="hudPos" class="mono"></span><span id="hudGrp" class="mono"></span></div>
+    <div id="teachMode" class="seg" role="tablist" aria-label="What to write"><button data-m="letters">Letters</button><button data-m="sentences">Sentences</button></div>
+    <div class="hud" id="lettersHud"><span id="hudPos" class="mono"></span><span id="hudGrp" class="mono"></span></div>
   </div>
+  <div id="lettersPane" class="tpane">
   <div class="ruler-row"><div class="ruler" aria-hidden="true"><i id="rulerHead"></i></div><span id="progText" class="mono"></span></div>
   <div class="stage">
     <button id="ghostPrev" class="ghost" aria-label="Previous letter"><canvas></canvas></button>
@@ -85,6 +87,19 @@
   </div>
   <details id="pvWrap"><summary class="mono">Preview this group</summary><div id="preview"></div></details>
   <div id="strip" aria-label="Letters"></div>
+  </div>
+  <div id="sentPane" class="tpane" hidden>
+    <div class="s-top"><p class="mono s-hint">Copy these lines in your normal handwriting, one line per row.</p>
+      <details id="sentList"><summary class="mono">Your sentences (<span id="sentN">0</span>)</summary><ul id="sentRows" class="float"></ul></details></div>
+    <ol id="sentText" lang="th"></ol>
+    <div class="sstage"><div id="spadWrap" class="frame"><canvas id="spad" aria-label="Sentence writing pad"></canvas></div></div>
+    <div class="ctrls">
+      <button id="sUndo" class="btn"><svg class="i"><use href="#i-undo"/></svg>Undo</button>
+      <button id="sClear" class="btn"><svg class="i"><use href="#i-x"/></svg>Clear</button>
+      <button id="sSkip" class="btn"><svg class="i"><use href="#i-shuffle"/></svg>Other sentence</button>
+      <button id="sNext" class="btn primary">Next<svg class="i"><use href="#i-right"/></svg></button>
+    </div>
+  </div>
 </section>
 
 <section id="sheet" hidden>

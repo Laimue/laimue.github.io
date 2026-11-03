@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 23; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 24; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -368,7 +368,7 @@
   const tmean = e => { e.sort(); const n = Math.max(1, Math.round(e.length * 0.85)); let t = 0; for (let i = 0; i < n; i++) t += e[i]; return t / n; }; // worst 15% ignored: stray ticks, a longer tail
   // Size (s), width (a) and place (tx, ty) that lay the drawn ink over the typed ink best, as the eye sees both, both ways.
   // null when the drawing doesn't look like the typed letter (another style, a scribble): then it is left as drawn.
-  function fitInk(st, L, free) { // free: size and height may change too (tails, marks), else only width and sideways
+  function fitInk(st, L, free, any) { // free: size and height may change too (tails, marks), else only width and sideways; any: always return, with .err
     const b = bbox({ s: st }), gd = grid(b, 0.4), m = new Uint8Array(gd.nx * gd.ny), P = [];
     ink({ s: st }, (x, y) => { m[Math.floor((y - gd.y0) / GR) * gd.nx + Math.floor((x - gd.x0) / GR)] = 1; P.push(x, y); }, GR / 2);
     const dd = dist(m, gd), cx = (b.x0 + b.x1) / 2, cy = (b.y0 + b.y1) / 2, Q = L.fp;
@@ -390,9 +390,10 @@
         const c = cost(y); if (c < best - 1e-6) { best = c; x = y; moved = true; }
       }
     }
-    if (err(...x) > LIKE) return null;
+    const e = err(...x); if (!any && e > LIKE) return null;
     const [s, a, tx, ty] = x;
-    return st.map(q => q.map((v, i) => (i % 2 ? cy + ty + s * (v - cy) : cx + tx + s * a * (v - cx))));
+    const out = st.map(q => q.map((v, i) => (i % 2 ? cy + ty + s * (v - cy) : cx + tx + s * a * (v - cx)))); out.err = e;
+    return out;
   }
   function resample(a, step) { // points every `step` along the stroke, ends kept
     if (a.length < 4) return a;
@@ -424,8 +425,10 @@
     });
   }
 
-  function variantsFor(hand, ch, fb, P) {
-    const drawn = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length).map(v => normalize(v, ch, fb, P));
+  function variantsFor(hand, ch, fb, P) { // taught versions, then letters cut from sentences (hand.c, each with a recency weight w)
+    const own = ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length), cut = (hand && hand.c && hand.c[ch]) || [];
+    const drawn = [...own, ...cut].map(v => normalize(v, ch, fb, P));
+    if (cut.length) drawn.w = [...own.map(() => 1), ...cut.map(v => v.w || 1)];
     if (drawn.length) return drawn;
     const f = synth(ch) || (fb && fb(ch)); return f ? [f] : [];
   }
@@ -982,7 +985,8 @@
     const mods = o.mods || {}; let ci = -1; // lasso edits per cluster: {dx, dy, s, seed}
     const pickR = (ch, R, keep) => {
       const vs = cache[ch] || (cache[ch] = variantsFor(hand, ch, o.fb, P)); if (!vs.length) return null;
-      let i = (R() * vs.length) | 0;
+      const r0 = R(); let i = (r0 * vs.length) | 0;
+      if (vs.w) { let t = r0 * vs.w.reduce((a, b) => a + b, 0); i = 0; while (i < vs.length - 1 && (t -= vs.w[i]) > 0) i++; } // newer sentence letters count a bit more (same R() draw)
       if (vs.length > 1 && i === last[ch]) i = (i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length;
       if (keep) last[ch] = i; let v = vs[i];
       if (vs.length > 1 && v.s) { const w = vs[(i + 1 + ((R() * (vs.length - 1)) | 0)) % vs.length], m = w.s && match(v, w); if (m) v = blend(m, R()); } // somewhere between two of their versions
@@ -1234,12 +1238,222 @@
     return { g };
   }
 
+  // ---- Sentences: cut a written page into letters (the text is known) and keep only the ones it is sure of ----
+  // rec = {lines, s: strokes over the whole pad, rows BOX_H apart, box units}. Unsure letters are skipped: a bad cut
+  // must never reach the library, a missed one costs nothing.
+  const CUTV = 1, SURE = 0.05; // centre-line distance (cdist): own versions of the same letter ~0.02-0.04, look-alikes 0.05+
+  const CUT_BASES = [...(GROUPS[0][1] + GROUPS[1][1] + GROUPS[2][1] + 'ฃฅฦ')].filter(c => !isMark(c)), CUT_UP = [...UPPER, ...TOP], CUT_LO = [...LOWER];
+  const ILOOK = new WeakMap();
+  function inkLook(v) { // a drawn letter seen the way typedLook sees a font letter: distance to its visible ink, its ink cells
+    let c = ILOOK.get(v); if (c) return c;
+    const g = grid(bbox(v), 0.5), m = new Uint8Array(g.nx * g.ny);
+    ink(v, (x, y) => { m[Math.floor((y - g.y0) / GR) * g.nx + Math.floor((x - g.x0) / GR)] = 1; }, GR / 2);
+    const d = dist(m, g), df = d.map(q => Math.max(q - HW, 0)), fp = [], pts = [];
+    for (let i = 0; i < d.length; i++) { const x = g.x0 + ((i % g.nx) + 0.5) * GR, y = g.y0 + (((i / g.nx) | 0) + 0.5) * GR; if (d[i] <= HW) fp.push(x, y); if (m[i]) pts.push(x, y); }
+    ILOOK.set(v, c = { g, df, fp, pts, dc: d }); return c;
+  }
+  const grow = (b, e) => ({ x0: b.x0 - e, y0: b.y0 - e, x1: b.x1 + e, y1: b.y1 + e });
+  // centre line to centre line, both ways, mean and 90th percentile: where a head sits (ด vs ค) counts, unlike the as-seen fit
+  function cdist(st, L) {
+    if (!L.dc) L.dc = dist(L.sk, L.g);
+    const g = grid(bbox({ s: st }), 0.3), m = new Uint8Array(g.nx * g.ny), e1 = [], e2 = [];
+    ink({ s: st }, (x, y) => { m[Math.floor((y - g.y0) / GR) * g.nx + Math.floor((x - g.x0) / GR)] = 1; e1.push(look(L.dc, L.g, x, y)); }, GR);
+    const dd = dist(m, g), Q = L.pts; for (let i = 0; i < Q.length; i += 2) e2.push(look(dd, g, Q[i], Q[i + 1]));
+    const q = a => { if (!a.length) return CAP; a.sort((x, y) => x - y); return (a.reduce((t, v) => t + v, 0) / a.length + a[Math.floor(a.length * 0.9)]) / 2; };
+    return (q(e1) + q(e2)) / 2;
+  }
+  // how far strokes st are from a look L whose visible box is T, after sizing st into T (marks keep their shape) and
+  // laying it over by eye; Infinity when even the as-seen fit says it is another shape. quick: no fit (ranking only)
+  function fitTo(st, L, T, mark, quick) {
+    const u = tbox({ s: st }), uw = Math.max(u.x1 - u.x0, 0.02), uh = Math.max(u.y1 - u.y0, 0.02);
+    const tw = Math.max(T.x1 - T.x0 - 2 * HW, 0.02), th = Math.max(T.y1 - T.y0 - 2 * HW, 0.02);
+    const ky = mark ? Math.hypot(tw, th) / Math.hypot(uw, uh) : th / uh, kx = mark ? ky : ky * Math.min(Math.max(tw / uw / ky, 0.8), 1.25);
+    if (!(ky > 0.3 && ky < 3)) return Infinity;
+    const cx = (u.x0 + u.x1) / 2, cy = (u.y0 + u.y1) / 2, mx = (T.x0 + T.x1) / 2, my = (T.y0 + T.y1) / 2;
+    const s2 = st.map(a => a.map((q, i) => (i % 2 ? my + (q - cy) * ky : mx + (q - cx) * kx)));
+    if (quick) return cdist(s2, L);
+    const f = fitInk(s2, L, true, true); return f.err > LIKE ? Infinity : cdist(f, L);
+  }
+  // the typed letter (leaned like this person) and up to 3 of the person's own versions
+  function cutLooks(ch, hand, fb, P, n = 3) {
+    const ref = fb(ch), o = [];
+    if (ref && ref.p) o.push({ L: typedLook(ref, P.sl || 0), T: tbox(ref) });
+    for (const v of ((hand && hand.g && hand.g[ch]) || []).filter(v => v && v.s && v.s.length).slice(0, n)) { const w = normalize(v, ch, fb, P); o.push({ L: inkLook(w), T: grow(tbox(w), HW) }); }
+    return o;
+  }
+  const like = (st, ch, hand, fb, P, n) => Math.min(Infinity, ...cutLooks(ch, hand, fb, P, n).map(k => fitTo(st, k.L, k.T, needsGhost(ch))));
+  const ALT = new WeakMap();
+  function alts(ch, fb) { // the 6 letters most like this one as typed: what a cut could be mistaken for
+    let a = ALT.get(fb); if (!a) ALT.set(fb, a = {}); if (a[ch]) return a[ch];
+    const r = fb(ch); if (!r || !r.p) return (a[ch] = []);
+    const st = trace(typedLook(r, 0)), mark = needsGhost(ch), pool = mark ? (LOWER.has(ch) ? CUT_LO : CUT_UP) : CUT_BASES;
+    return (a[ch] = pool.filter(c => c !== ch && fb(c) && fb(c).p).map(c => [c, fitTo(st, typedLook(fb(c), 0), tbox(fb(c)), mark, true)]).sort((p, q) => p[1] - q[1]).slice(0, 6).map(p => p[0]));
+  }
+  // sure: close to its letter, and clearly closer to it than to any look-alike
+  function sure(st, ch, hand, fb, P) {
+    const d = like(st, ch, hand, fb, P); if (!(d <= SURE)) return null;
+    for (const c of alts(ch, fb)) if (like(st, c, hand, fb, P, 1) < Math.max(d + 0.015, 1.4 * d)) return null;
+    return d;
+  }
+  const sbox = sts => { const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity }; for (const a of sts) { const q = bbox({ s: [a] }); b.x0 = Math.min(b.x0, q.x0); b.x1 = Math.max(b.x1, q.x1); b.y0 = Math.min(b.y0, q.y0); b.y1 = Math.max(b.y1, q.y1); } return b; };
+  function cutRow(rec, r, hand, fb, info = {}) { // info: filled with what happened (tests, tuning)
+    const text = rec.lines[r], out = []; if (!text) return out;
+    const P = person(hand, fb), last = rec.lines.length - 1, y0 = r * BOX_H;
+    const sts = rec.s.filter(a => { const b = bbox({ s: [a] }); return Math.min(Math.max(Math.floor((b.y0 + b.y1) / 2 / BOX_H), 0), last) === r; }).map(a => a.map((q, i) => (i % 2 ? q - y0 : q)));
+    const up = [], lo = [], atoms = [];
+    for (const a of sts.map(a => [a, bbox({ s: [a] })]).sort((p, q) => p[1].x0 - q[1].x0)) {
+      const [s, b] = a;
+      if (b.y1 <= XH + 0.12) { up.push({ s: [s], b }); continue; }
+      if (b.y0 >= BASE - 0.12) { lo.push({ s: [s], b }); continue; }
+      const t = atoms[atoms.length - 1], ov = t ? Math.min(t.b.x1, b.x1) - Math.max(t.b.x0, b.x0) : -1;
+      if (t && ov >= 0.5 * Math.min(t.b.x1 - t.b.x0, b.x1 - b.x0)) { t.s.push(s); t.b = sbox(t.s); } else atoms.push({ s: [s], b }); // strokes stacked on each other: one letter
+    }
+    const cls = parse(text), items = []; let gap = 0;
+    cls.forEach((cl, ci) => {
+      if (cl.sp) { gap = SPACE; return; }
+      for (const ch of [cl.base, cl.am ? AM : null]) if (ch) {
+        const own = ((hand && hand.g && hand.g[ch]) || []).find(v => v && v.s && v.s.length), ref = fb(ch), w = own ? normalize(own, ch, fb, P) : ref;
+        const e = w ? Math.max(bbox(w).x1 - bbox(w).x0 + 2 * pen(w), 0.15) : 0.5;
+        items.push({ ch, ci, cl, e, gap: items.length ? gap + 0.08 : 0 }); gap = 0;
+      }
+    });
+    const m = atoms.length, n = items.length; if (!m || !n) return out;
+    // line up atoms with the letters of the text: widths and places like the text, scaled to how wide this row was written
+    const E = items.reduce((t, it) => t + it.e + it.gap, 0), X0 = atoms[0].b.x0, s = Math.min(Math.max((atoms[m - 1].b.x1 - X0) / E, 0.5), 2.5);
+    let cum = 0; for (const it of items) { cum += it.gap; it.c = X0 + s * (cum + it.e / 2); cum += it.e; }
+    const SKIP = 1, MISS = 1, D = [...Array(n + 1)].map(() => new Float64Array(m + 1).fill(Infinity)), B = [...Array(n + 1)].map(() => new Int8Array(m + 1));
+    D[0][0] = 0;
+    for (let j = 0; j <= n; j++) for (let i = 0; i <= m; i++) {
+      const d0 = D[j][i]; if (d0 === Infinity) continue;
+      if (i < m && d0 + SKIP < D[j][i + 1]) { D[j][i + 1] = d0 + SKIP; B[j][i + 1] = -1; }
+      if (j < n && d0 + MISS < D[j + 1][i]) { D[j + 1][i] = d0 + MISS; B[j + 1][i] = 0; }
+      if (j < n) for (let k = 1; k <= 3 && i + k <= m; k++) {
+        const it = items[j], g = atoms.slice(i, i + k), gx0 = Math.min(...g.map(a => a.b.x0)), gx1 = Math.max(...g.map(a => a.b.x1)), ew = s * it.e;
+        let c = ((gx1 - gx0 + 2 * HW - ew) / ew) ** 2 + 0.15 * (((gx0 + gx1) / 2 - it.c) / s) ** 2;
+        for (let t = 1; t < k; t++) c += (Math.max(0, g[t].b.x0 - g[t - 1].b.x1 - 0.04) / 0.1) ** 2; // a gap inside a letter
+        if (d0 + c < D[j + 1][i + k]) { D[j + 1][i + k] = d0 + c; B[j + 1][i + k] = k; }
+      }
+    }
+    const grp = new Array(n).fill(null); let bad = 0;
+    for (let j = n, i = m; j > 0 || i > 0;) { const k = B[j][i]; if (k === -1) { i--; bad++; } else if (k === 0) { j--; bad++; } else { grp[j - 1] = atoms.slice(i - k, i); i -= k; j--; } }
+    Object.assign(info, { atoms: m, items: n, bad, cost: +(D[n][m] / n).toFixed(3), s: +s.toFixed(2), grp: grp.map(g => g ? g.length : 0).join('') });
+    if (bad > 0.3 * n || D[n][m] / n > 0.6) return out; // most of the row doesn't line up: another text, or words left out
+    // marks: each loose stroke above or below goes to the nearest letter
+    const near = a => { let bj = -1, bd = Infinity; grp.forEach((g, j) => { if (!g) return; const c = (Math.min(...g.map(q => q.b.x0)) + Math.max(...g.map(q => q.b.x1))) / 2, d = Math.abs((a.b.x0 + a.b.x1) / 2 - c); if (d < bd) { bd = d; bj = j; } }); return bj; };
+    const ups = items.map(() => []), los = items.map(() => []);
+    for (const a of up) { const j = near(a); if (j >= 0) ups[j].push(a); }
+    for (const a of lo) { const j = near(a); if (j >= 0) los[j].push(a); }
+    const pieces = []; // {ch, s (row units), d (null: unsure), ci}
+    items.forEach((it, j) => {
+      if (!grp[j]) return;
+      let st = grp[j].flatMap(a => a.s);
+      const um = it.ch === AM ? [] : it.cl.marks.filter(c => !LOWER.has(c)), lm = it.ch === AM ? [] : it.cl.marks.filter(c => LOWER.has(c));
+      const upHere = items[j + 1] && items[j + 1].ch === AM && items[j + 1].ci === it.ci ? [] : ups[j]; // ำ's ring and tone: not cut
+      if (!um.length && upHere.length && TALL.has(it.ch)) st = st.concat(...upHere.map(a => a.s)); // a tail drawn on its own
+      if (!lm.length && los[j].length && DOWN.has(it.ch)) st = st.concat(...los[j].map(a => a.s));
+      const d = sure(st, it.ch, hand, fb, P);
+      pieces.push({ ch: it.ch, s: st, d, ci: it.ci });
+      const vb0 = grow(sbox(st), HW);
+      const marks = (list, atomsM) => { // marks of this letter, bottom first (vowel under tone); 1-2 strokes each
+        if (!list.length || !atomsM.length || atomsM.length > list.length * 2) return;
+        const A = atomsM.slice().sort((p, q) => (list === lm ? 1 : -1) * ((p.b.y0 + p.b.y1) - (q.b.y0 + q.b.y1)));
+        let best = null;
+        const tryCut = (k, at, acc) => {
+          if (k === list.length) { if (at === A.length) { const c = acc.reduce((t, q) => t + q.e, 0); if (!best || c < best.c) best = { c, acc }; } return; }
+          for (let z = 1; z <= 2 && at + z <= A.length; z++) { const s2 = A.slice(at, at + z).flatMap(a => a.s); tryCut(k + 1, at + z, [...acc, { ch: list[k], s: s2, e: like(s2, list[k], hand, fb, P, 1) }]); }
+        };
+        tryCut(0, 0, []);
+        if (best) for (const q of best.acc) pieces.push({ ch: q.ch, s: q.s, d: sure(q.s, q.ch, hand, fb, P), ci: it.ci, dx: GHOST.r - vb0.x1 }); // marks are kept beside a ghost ก, like the Letters pad
+      };
+      marks(um, upHere); marks(lm, DOWN.has(it.ch) ? [] : los[j]);
+    });
+    info.d = pieces.map(p => p.ch + (p.d === null ? '?' : '')).join('');
+    if (pieces.filter(p => p.d !== null).length < 0.5 * pieces.length) return out; // mostly unsure: something odd about this row
+    for (const p of pieces) if (p.d !== null) {
+      const b = sbox(p.s), dx = p.dx != null ? p.dx : GX + HW - b.x0;
+      out.push({ ch: p.ch, s: p.s.map(a => a.map((v, i) => +(i % 2 ? v : v + dx).toFixed(3))), d: +p.d.toFixed(4), r, ci: p.ci, b: [b.x0, b.y0, b.x1, b.y1].map(q => +q.toFixed(3)) }); // b: where it was on the row (row units)
+    }
+    return out;
+  }
+  const cut = (rec, hand, fb) => ({ v: CUTV, p: rec.lines.flatMap((_, r) => cutRow(rec, r, hand, fb)) });
+
+  // Test helper: a fake person copies the lines onto the pad with known habits. o: {seed, messy, gap, slope, mdy (marks
+  // higher < 0), join / scribble: [[row, cluster]] (that base runs into the next one in one stroke / is a zigzag), other: row
+  // written with another text, swap: [[row, cluster, letter]] a slip of the pen: another letter written there}. Returns a pad record plus truth: [{r, ci, ch, b}] where each letter really is.
+  function fakeSentence(fb, lines, o = {}) {
+    const fh = fakeHand(fb, o.seed || 1, !!o.messy), R = rng((o.seed || 1) * 13 + 5), s = [], truth = [], has = (l, r, ci) => (l || []).some(([a, b]) => a === r && b === ci);
+    lines.forEach((line, r) => {
+      let x = 0.4, k = 0; const cls = parse(o.other === r ? 'สวัสดีตอนเช้าทุกคน' : line), of = new Map();
+      let sw = null;
+      const pick = c0 => { const ch = sw && c0 === sw[0] ? sw[1] : c0, vs = fh.g[ch] || [], v = vs.length ? vs[(R() * vs.length) | 0] : (fb(ch) && fb(ch).p ? { s: trace(typedLook(fb(ch), 0)) } : null); if (v) of.set(v, ch); return v; };
+      let prev = null;
+      cls.forEach(cl => {
+        const ci = k++;
+        if (cl.sp) { x += 0.45; prev = null; return; }
+        const w = (o.swap || []).find(([a, b]) => a === r && b === ci); sw = w ? [cl.base, w[2]] : null;
+        const b = buildCluster(cl, pick); if (!b.parts.length) return;
+        const dy = r * BOX_H + (o.slope || 0) * x;
+        b.parts.forEach((p, pi) => {
+          const mine = [];
+          for (const a of p.v.s || []) {
+            let q = a.map((v, i) => (i % 2 ? v + p.dy + dy + (p.m ? o.mdy || 0 : 0) : v + p.dx - b.x0 + x));
+            if (!pi && has(o.scribble, r, ci)) { const bb = bbox({ s: [q] }); q = []; for (let t = 0; t <= 12; t++) q.push(bb.x0 + (bb.x1 - bb.x0) * t / 12, t % 2 ? bb.y0 : bb.y1); }
+            mine.push(q.map((v, i) => (i % 2 ? v - r * BOX_H : v)));
+            if (!pi && prev) { prev.push(...q); prev = null; continue; } // joined to the letter before
+            s.push(q); if (!pi && has(o.join, r, ci)) prev = q;
+          }
+          const bb = sbox(mine); truth.push({ r, ci, ch: of.get(p.v), b: [bb.x0, bb.y0, bb.x1, bb.y1] });
+        });
+        x += b.x1 - b.x0 + 0.1 + (o.gap || 0);
+      });
+    });
+    return { lines, s, w: 20, truth };
+  }
+
+  // Sentences tab: the lines to copy next. bank = [[line, line?], ...] (one sentence each), have = {ch: samples so far},
+  // written = Set of lines already written. Fills `rows` pad rows with the sentences that bring the
+  // most of the letters this person has fewest samples of (score per row), from a random 300 of the bank.
+  function pickLines(bank, have, written, R = Math.random, rows = 3) {
+    const got = { ...have }, lines = [], ids = [];
+    const score = it => { let t = 0; for (const c of new Set(it.join(''))) if (c !== ' ') t += 1 / (1 + (got[c] || 0)) ** 2; return t / it.length; };
+    while (lines.length < rows) {
+      let best = -1, bs = -1;
+      for (let k = 0; k < 300; k++) {
+        const i = (R() * bank.length) | 0, it = bank[i];
+        if (ids.includes(i) || it.length > rows - lines.length || written.has(it[0])) continue;
+        const s = score(it); if (s > bs) { bs = s; best = i; }
+      }
+      if (best < 0) break;
+      ids.push(best); lines.push(...bank[best]);
+      for (const c of bank[best].join('')) got[c] = (got[c] || 0) + 1;
+    }
+    return { lines, ids };
+  }
+
   // Engine checks using the fallback font. Returns [{name, ok, info}].
   function selfTest(fb) {
     const pick = ch => { const v = fb(ch); if (!v) throw new Error('no glyph ' + ch); return v; };
     const box = (p) => { const b = vb(p.v); /* visible edges */ return { x0: b.x0 + p.dx, x1: b.x1 + p.dx, y0: b.y0 + p.dy, y1: b.y1 + p.dy }; };
     const C = s => buildCluster(parse(s)[0], pick).parts.map(box);
     const r = [], t = (name, ok, info) => r.push({ name, ok: !!ok, info: info || '' });
+    { // Sentences tab picker: no ฆ samples yet -> the sentence with ฆ; written lines are skipped; rows get filled
+      const bk = [['กากา'], ['ฆ้อง'], ['มามา'], ['ดาดา'], ['นานา', 'กาม']], hv = {}; for (const c of 'กามนอง้') hv[c] = 5;
+      const p = pickLines(bk, hv, new Set(), rng(5), 1); t('sentence picker fills the gap (ฆ)', p.lines[0] === 'ฆ้อง', p.lines.join('|'));
+      const q = pickLines(bk, hv, new Set(['ฆ้อง']), rng(5), 3); t('picker skips written lines, fills 3 rows', q.lines.length === 3 && !q.lines.includes('ฆ้อง'), q.lines.join('|'));
+    }
+    { // v24: letters cut from copied sentences. Kept = the right letter in the right place; slips, joins, scribbles and
+      // a row with other text are never kept (truth: where fakeSentence really wrote each letter)
+      const lines = ['สวัสดีครับคุณแม่', 'ฉันชอบกินข้าวผัดกุ้ง', 'เขาไปโรงเรียนทุกวัน'];
+      const at = (rec, p) => rec.truth.find(q => q.r === p.r && q.ci === p.ci && q.ch === p.ch && Math.abs(q.b[0] + q.b[2] - p.b[0] - p.b[2]) < 0.2 && Math.abs(q.b[1] + q.b[3] - p.b[1] - p.b[3]) < 0.2);
+      const run = (o, taught) => { const rec = fakeSentence(fb, lines, o), c = cut(rec, taught, fb); return { rec, c, right: c.p.filter(p => at(rec, p)).length, wrong: c.p.filter(p => !at(rec, p)).map(p => p.ch + p.r + ':' + p.ci) }; };
+      const neat = fakeHand(fb, 3, false), messy = fakeHand(fb, 11, true);
+      const a = run({ seed: 3 }, neat); t('cut: clean copy, most letters kept, every one right', a.right >= 0.8 * a.rec.truth.length && !a.wrong.length, a.right + '/' + a.rec.truth.length + ' ' + a.wrong.join(' '));
+      const b = run({ seed: 12, messy: true, gap: 0.15, slope: 0.01 }, messy); t('cut: messy copy, none wrong', b.right >= 0.4 * b.rec.truth.length && !b.wrong.length, b.right + '/' + b.rec.truth.length + ' ' + b.wrong.join(' '));
+      const e = run({ seed: 3, join: [[0, 2]], scribble: [[0, 6]], swap: [[2, 1, 'ช']], other: 1 }, neat), bad = e.c.p.filter(p => (p.r === 0 && [2, 3, 6].includes(p.ci) && !isMark(p.ch)) || (p.r === 2 && p.ci === 1 && !isMark(p.ch)) || p.r === 1);
+      t('cut: joined, scribbled, slipped letters and a wrong row never kept', !bad.length && !e.wrong.length && e.right > 15, bad.map(p => p.ch + p.r + ':' + p.ci).join(' ') + ' | ' + e.wrong.join(' ') + ' kept ' + e.right);
+      const pc = a.c.p.find(p => !isMark(p.ch)), h2 = { g: neat.g, c: { [pc.ch]: [{ s: pc.s, w: 2 }] } }, P2 = person(neat, fb), v2 = variantsFor(h2, pc.ch, fb, P2);
+      t('cut letters join the library with their weight', v2.length === 2 && v2.w.join() === '1,2' && !variantsFor(neat, pc.ch, fb, P2).w, pc.ch);
+    }
     const kii = C('กี่'); t('กี่ tone above vowel', kii[2].y1 <= kii[1].y0, kii[2].y1.toFixed(2) + ' <= ' + kii[1].y0.toFixed(2));
     const kak = C('กั๊'); t('กั๊ tone above mai han-akat', kak[2].y1 <= kak[1].y0);
     const pa = buildCluster(parse('ป้')[0], pick), tl = tailLeft(pa.parts[0].v), pt = box(pa.parts[1]);
@@ -1501,6 +1715,6 @@
     return r;
   }
 
-  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest, setRefs, synth, rich, mathParse, _look: typedLook, _trace: trace };
+  const API = { VERSION, XH, BASE, BOX_W, BOX_H, GX, GHOST, GROUPS, REQUIRED_GROUPS, needsGhost, isMark, fontVariant, variantsFor, parse, buildCluster, layout, bbox, fakeHand, selfTest, setRefs, synth, rich, mathParse, pickLines, cut, cutRow, CUTV, fakeSentence, _dbgLike: (st, ch, hand, fb) => like(st, ch, hand, fb, person(hand, fb)), _dbgAlts: (ch, fb) => alts(ch, fb), _look: typedLook, _trace: trace };
   if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.Hand = API;
 })(this);

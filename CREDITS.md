@@ -15,3 +15,9 @@ Only averages of groups of 15 or more samples are used. No single person's writi
 - **KVIS Thai OCR** (CC BY 4.0): https://data.mendeley.com/datasets/8nr3pbdk5c/1
 
 Rebuild: `python tools/crowd.py` then `node tools/fonts.js`.
+
+## Sentences to copy (bank.json)
+- **Tatoeba** (CC BY 2.0 FR): Thai sentences from https://tatoeba.org, export https://downloads.tatoeba.org/exports/per_language/tha/tha_sentences.tsv.bz2 (filtered to Thai letters, wrapped into lines).
+- The traditional Thai alphabet poem (เป็นมนุษย์สุดประเสริฐเลิศคุณค่า …), public domain.
+
+Rebuild: unpack the export to `tools/cache/tatoeba/tha.tsv`, then `node tools/bank.js`.

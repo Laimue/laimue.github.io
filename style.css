@@ -155,6 +155,25 @@ input[type=range] { width: 120px; accent-color: var(--orange); height: 44px; }
 #preview { background: var(--paper); border-radius: 6px; padding: 8px 12px; color: #0d0d0d; max-height: 22vh; overflow: auto; }
 #strip { flex: none; display: flex; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden; padding: 6px 50%; margin-top: auto; scroll-snap-type: x proximity; scrollbar-width: none; touch-action: pan-x; }
 #strip::-webkit-scrollbar { display: none; }
+.t-head { flex-wrap: wrap; }
+
+.tpane { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+/* Sentences: model lines above, a wide pad of 2-3 ruled rows (sized in app.js), list of what was written */
+.s-hint { margin: 0; text-align: center; color: var(--muted); }
+#sentText { margin: 0 auto; padding: 0 0 0 2.2em; max-width: 100%; font-size: clamp(20px, 2.6vw, 30px); line-height: 1.45; color: var(--ink); }
+#sentText li::marker { font: 13px var(--mono); color: var(--muted); }
+.sstage { flex: 1; min-height: 160px; position: relative; }
+#spadWrap { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+#spad { display: block; background: var(--paper); border-radius: 4px; touch-action: none; }
+.s-top { position: relative; display: flex; align-items: center; justify-content: center; gap: 6px 18px; flex-wrap: wrap; }
+#sentList summary { cursor: pointer; list-style: none; min-height: 32px; display: flex; align-items: center; white-space: nowrap; padding: 0 12px; border-radius: 999px; background: var(--surface); color: var(--ink); }
+#sentList summary::-webkit-details-marker { display: none; }
+#sentRows { position: absolute; left: 50%; transform: translateX(-50%); top: calc(100% + 6px); z-index: 30; width: min(560px, 100%); list-style: none; margin: 0; padding: 6px; max-height: 50vh; overflow: auto; }
+#sentRows:empty::before { content: "Nothing written yet."; display: block; padding: 10px 12px; color: var(--muted); }
+#sentRows li { display: flex; align-items: center; gap: 10px; padding: 2px 0 2px 12px; }
+#sentRows li + li { border-top: 1px solid var(--active); }
+#sentRows .tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#sentRows .dt { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
 .chip { position: relative; flex: none; width: 44px; height: 68px; display: grid; place-items: center; scroll-snap-align: center; border-radius: 6px; }
 .chip canvas { width: 40px; height: 65px; background: var(--paper); border-radius: 4px; opacity: .85; }
 .chip.ok::after { content: ""; position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--orange); box-shadow: var(--hot-shadow); }
@@ -223,6 +242,7 @@ input[type=range] { width: 120px; accent-color: var(--orange); height: 44px; }
   .bar-top { gap: 6px; padding-left: 12px; padding-right: 4px; }
   .tab { padding: 0 8px; } .tab .i { display: none; } .tab::after { left: 8px; right: 8px; }
   .hud #hudGrp, .ghost { display: none; }
+  #teach { --ph: max(180px, min(calc(var(--use) * .56), calc(var(--use) - 404px), calc(70vw * 1.625))); } /* Letters | Sentences wraps to its own row */
   .ctrls { gap: 6px; } .ctrls .btn { padding: 0 14px; } #verRow::before { display: none; }
   .tools { gap: 6px; } .pen, .div { display: none; }
 }

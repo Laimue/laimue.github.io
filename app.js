@@ -30,6 +30,27 @@ let hand = { v: 1, g: {} }, font = null, saveT, handGen = 0; // handGen: bumped 
 const fbCache = {};
 const fb = ch => (ch in fbCache ? fbCache[ch] : (fbCache[ch] = font ? H.fontVariant(font, ch) : null));
 const saveHand = () => { handGen++; clearTimeout(saveT); saveT = setTimeout(() => db.set('hand', hand).catch(() => toast('Could not save on this device — use ⋯ → Save my handwriting file.', 6000)), 300); };
+// written sentences: their own key (hand is rewritten on every letter stroke), saved only on Next / delete; in the backup file as `sn`
+let sents = [], cutG = {}, cutting = false;
+const saveSents = () => { handGen++; return db.set('sents', sents).catch(() => toast('Could not save on this device — use ⋯ → Save my handwriting file.', 6000)); };
+const use = () => ({ g: hand.g, c: cutG }); // what the engine writes with: taught letters + letters cut from sentences
+function rebuildCut() { // newest first; a newer sentence's letters weigh a bit more, old ones still count
+  cutG = {}; const n = sents.length;
+  sents.forEach((r, k) => { if (r.cut) for (const p of r.cut.p) { p.w = 1 / (1 + (n - 1 - k) / 30); (cutG[p.ch] || (cutG[p.ch] = [])).unshift(p); } });
+  for (const ch in cutG) cutG[ch] = cutG[ch].slice(0, 20); // shortcut: ≤20 cut versions per letter for speed; raise if output starts repeating
+  handGen++;
+}
+async function cutAll() { // cut sentences into letters in the background, one row at a time so the page stays smooth
+  if (cutting || !font) return; cutting = true;
+  try {
+    for (let r; (r = sents.find(q => !q.cut || q.cut.v !== H.CUTV));) {
+      let p = [];
+      try { for (let i = 0; i < r.lines.length; i++) { await new Promise(res => setTimeout(res, 30)); p.push(...H.cutRow(r, i, hand, fb)); } }
+      catch (e) { console.warn('cut', e); p = []; } // a page it can't read teaches nothing
+      if (sents.includes(r)) { r.cut = { v: H.CUTV, p }; rebuildCut(); saveSents(); }
+    }
+  } finally { cutting = false; }
+}
 
 // ---------- files in / out
 function validHand(o) { // trust boundary: a handwriting file someone picked
@@ -40,6 +61,13 @@ function validHand(o) { // trust boundary: a handwriting file someone picked
     g[ch] = list.slice(0, 5).map(v => (v && Array.isArray(v.s) && v.s.length && v.s.every(a => Array.isArray(a) && a.length >= 2 && a.length % 2 === 0 && a.length <= 20000 && a.every(Number.isFinite)) ? { s: v.s } : null));
   }
   return { v: 1, g };
+}
+const okStroke = a => Array.isArray(a) && a.length >= 2 && a.length % 2 === 0 && a.length <= 20000 && a.every(Number.isFinite);
+function validSents(list) { // trust boundary too: the sentences part of a picked file
+  if (!Array.isArray(list)) return [];
+  return list.filter(r => r && Array.isArray(r.lines) && r.lines.length >= 1 && r.lines.length <= 3 && r.lines.every(l => typeof l === 'string' && l.length <= 200)
+    && Array.isArray(r.s) && r.s.length && r.s.length <= 3000 && r.s.every(okStroke) && Number.isFinite(r.w) && r.w > 0 && r.w < 100)
+    .map(r => ({ id: String(r.id || Math.random().toString(36).slice(2)).slice(0, 40), t: Number.isFinite(r.t) ? r.t : 0, lines: r.lines, s: r.s, w: r.w }));
 }
 async function saveFile(blob, name) {
   const file = new File([blob], name, { type: blob.type });
@@ -59,17 +87,17 @@ function offerShare(file) {
   b.onclick = () => { t.hidden = true; navigator.share({ files: [file] }).catch(() => {}); };
   t.textContent = ''; t.append(b); t.hidden = false;
 }
-const saveHandFile = () => saveFile(new Blob([JSON.stringify(hand)], { type: 'application/json' }), 'laimue-handwriting.json');
+const saveHandFile = () => saveFile(new Blob([JSON.stringify({ ...hand, sn: sents.map(({ cut, ...r }) => r) })], { type: 'application/json' }), 'laimue-handwriting.json');
 async function loadHandFile(file) {
-  let h = null; try { h = validHand(JSON.parse(await file.text())); } catch { }
+  let h = null, sn = []; try { const o = JSON.parse(await file.text()); h = validHand(o); sn = validSents(o.sn); } catch { }
   if (!h) return toast('That is not a LaiMue handwriting file.');
-  if (taught() && !confirm('Replace the handwriting on this device with this file?')) return;
-  hand = h; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('Handwriting loaded');
+  if ((taught() || sents.length) && !confirm('Replace the handwriting on this device (letters and written sentences) with this file?')) return;
+  hand = h; sents = sn; rebuildCut(); saveHand(); saveSents(); cutAll(); renderTeach(); renderSentList(); if (sheet) sheet.pages.forEach(renderInk); toast('Handwriting loaded');
 }
 function clearHand() {
-  if (!taught()) return toast('There are no letters to clear yet.');
-  if (!confirm('Erase ALL the letters you wrote on this device and start again? This cannot be undone. If you might want them back, tap Cancel and use "Save my handwriting file" first.')) return;
-  hand = { v: 1, g: {} }; saveHand(); renderTeach(); if (sheet) sheet.pages.forEach(renderInk); toast('All letters cleared. Write them again on the Teach tab.');
+  if (!taught() && !sents.length) return toast('There are no letters to clear yet.');
+  if (!confirm('Erase ALL the letters and sentences you wrote on this device and start again? This cannot be undone. If you might want them back, tap Cancel and use "Save my handwriting file" first.')) return;
+  hand = { v: 1, g: {} }; sents = []; rebuildCut(); saveHand(); saveSents(); renderTeach(); renderSentList(); if (sheet) sheet.pages.forEach(renderInk); toast('All letters cleared. Write them again on the Teach tab.');
 }
 
 // ---------- Teach screen: one big pad for the current letter + a strip of every letter; the chosen version (1-5)
@@ -136,7 +164,13 @@ function buildTeach() {
     const b = document.createElement('button'); b.textContent = v + 1; b.dataset.v = v; b.setAttribute('aria-label', 'Version ' + (v + 1));
     b.onclick = () => { if (v === ver) return; cancelAdv(); ver = v; LS.set('ver', v); renderTeach(); }; vr.append(b);
   }
-  attachPen(padCv());
+  const cv = padCv();
+  attachPen(cv, {
+    pt: e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * H.BOX_W).toFixed(3), +((e.clientY - r.top) / r.height * H.BOX_H).toFixed(3)]; },
+    down: () => { cancelAdv(); if (M.settle(cv)) { M.settle(ghosts()[0]); M.settle(ghosts()[1]); drawGhosts(); } }, // a letter swap still running ends now, so the stroke lands on this letter
+    draw: drawPad,
+    end: pts => { const l = slots(CHARS[cur].ch); l[ver] = { s: [...(l[ver] ? l[ver].s : []), pts] }; dirty = true; saveHand(); drawPad(); drawChip(cur); progress(); queueAdv(); },
+  });
   $('#undo').onclick = () => edit(s => (s.pop(), s));
   $('#clear').onclick = () => edit(() => []);
   $('#prev').onclick = $('#ghostPrev').onclick = () => go(cur - 1, -1);
@@ -150,30 +184,29 @@ function edit(fn) { // variants are replaced, never mutated (the engine caches t
   const s = fn(l[ver].s.slice()); l[ver] = s.length ? { s } : null;
   saveHand(); drawPad(); drawChip(cur); progress();
 }
-function attachPen(cv) {
-  const pt = e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * H.BOX_W).toFixed(3), +((e.clientY - r.top) / r.height * H.BOX_H).toFixed(3)]; };
+// a drawing surface; o.pt(e) -> [x, y] in box units, o.down() before a stroke, o.draw() while inking, o.end(points)
+function attachPen(cv, o) {
   cv.addEventListener('pointerdown', e => {
     if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); document.body.classList.add('pen-seen'); }
     if ((e.pointerType === 'touch' && penSeen) || drawing) return; // palm rejection once a Pencil was used
     e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
-    cancelAdv(); if (M.settle(cv)) { M.settle(ghosts()[0]); M.settle(ghosts()[1]); drawGhosts(); } // a letter swap still running ends now, so the stroke lands on this letter
+    o.down();
     document.body.classList.add('inking');
-    drawing = { id: e.pointerId, pts: pt(e) }; drawPad();
+    drawing = { id: e.pointerId, pts: o.pt(e) }; o.draw();
   });
   cv.addEventListener('pointermove', e => {
     if (!drawing || drawing.id !== e.pointerId) return;
     const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
     for (const ev of evs.length ? evs : [e]) {
-      const [x, y] = pt(ev), p = drawing.pts;
+      const [x, y] = o.pt(ev), p = drawing.pts;
       if (Math.hypot(x - p[p.length - 2], y - p[p.length - 1]) >= 0.012) p.push(x, y);
     }
-    drawPad();
+    o.draw();
   });
   const end = e => {
     if (!drawing || drawing.id !== e.pointerId) return;
-    const d = drawing, l = slots(CHARS[cur].ch); drawing = null; document.body.classList.remove('inking');
-    l[ver] = { s: [...(l[ver] ? l[ver].s : []), d.pts] }; dirty = true;
-    saveHand(); drawPad(); drawChip(cur); progress(); queueAdv();
+    const d = drawing; drawing = null; document.body.classList.remove('inking');
+    o.end(d.pts);
   };
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
 }
@@ -212,7 +245,7 @@ function renderPreview() { // this group's letters as they will appear in worksh
   const g = CHARS[cur].group, w = (el.clientWidth || 824) - 24;
   const text = CHARS.filter(c => c.group === g && count(c.ch)).map(c => (H.needsGhost(c.ch) ? 'ก' : '') + c.ch).join(' ');
   if (!text) { el.textContent = 'Nothing written in this group yet.'; return; }
-  const r = H.layout(text, hand, { x: 4, y: 0, width: w - 8, u: 16, gap: 2.4, seed: 1, fb });
+  const r = H.layout(text, use(), { x: 4, y: 0, width: w - 8, u: 16, gap: 2.4, seed: 1, fb });
   el.innerHTML = `<svg viewBox="0 0 ${w} ${r.height}" width="100%" height="${r.height}">${penPaths(r, '#141414')}<path d="${pathD(r.fills, true)}" fill="#141414"/></svg>`;
 }
 function progress() {
@@ -228,6 +261,82 @@ function progress() {
   }
 }
 
+// ---------- Sentences: copy 2-3 real Thai lines on a ruled pad (rows BOX_H apart, in box units). Each written page is a
+// record {id, t, lines, s: strokes over the whole pad, w: pad width} that teaches the engine.
+let bank = null, spage = LS.get('spage', null), sink = [], spadU = 0, tmode = LS.get('tmode', 'letters');
+const ROW = H.BOX_H, spadCv = () => $('#spad');
+const loadBank = () => (bank ? Promise.resolve(bank) : fetch('bank.json').then(r => r.json()).then(b => (bank = b)));
+function have() { // samples of each letter so far: taught versions + letters cut from sentences (+ a little for each time written)
+  const n = {}; for (const c of CHARS) n[c.ch] = count(c.ch);
+  for (const ch in cutG) n[ch] = (n[ch] || 0) + cutG[ch].length;
+  for (const r of sents) for (const c of r.lines.join('')) n[c] = (n[c] || 0) + 0.3;
+  return n;
+}
+async function newPage() {
+  let b; try { b = await loadBank(); } catch { return toast('Could not load the sentences. Check the internet once, then try again.'); }
+  const p = H.pickLines(b, have(), new Set(sents.flatMap(r => r.lines)));
+  if (!p.lines.length) return toast('You have written every sentence!');
+  spage = { lines: p.lines, w: +Math.max(11, 0.95 * Math.max(...p.lines.map(l => H.parse(l).length))).toFixed(2) }; // ~1.5x the typed line
+  LS.set('spage', spage); sink = []; renderSent();
+}
+function renderSent() {
+  if (!spage) return newPage();
+  const ol = $('#sentText'); ol.textContent = '';
+  for (const l of spage.lines) { const li = document.createElement('li'); li.textContent = l; ol.append(li); }
+  sizeSpad();
+}
+function sizeSpad() {
+  const st = $('.sstage'), cv = spadCv(), rows = spage.lines.length; if (!st.clientWidth) return;
+  spadU = Math.min(st.clientWidth / spage.w, st.clientHeight / (rows * ROW));
+  cv.style.width = spage.w * spadU + 'px'; cv.style.height = rows * ROW * spadU + 'px';
+  drawSpad();
+}
+function drawSpad() {
+  const cv = spadCv(), rows = spage.lines.length, k = spadU * (devicePixelRatio || 1), W = Math.round(spage.w * k), Ht = Math.round(rows * ROW * k);
+  if (cv.width !== W || cv.height !== Ht) { cv.width = W; cv.height = Ht; }
+  const x = cv.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, W, Ht); x.setTransform(k, 0, 0, k, 0, 0);
+  x.lineWidth = 1 / spadU;
+  const hl = (y, col, dash) => { x.strokeStyle = col; x.setLineDash(dash ? [4 / spadU, 4 / spadU] : []); x.beginPath(); x.moveTo(0, y); x.lineTo(spage.w, y); x.stroke(); };
+  for (let r = 0; r < rows; r++) { const y = r * ROW; hl(y + 0.3, '#e7e5df', 1); hl(y + H.XH, '#d3d0c8'); hl(y + H.BASE, '#a29e94'); hl(y + 2.5, '#e7e5df', 1); } // the Letters pad's lines, per row
+  x.setLineDash([]); x.strokeStyle = '#141414'; x.lineWidth = 0.075; x.lineCap = x.lineJoin = 'round';
+  for (const a of sink) strokeLine(x, a);
+  if (drawing) strokeLine(x, drawing.pts);
+}
+function renderSentList() {
+  $('#sentN').textContent = sents.length;
+  const ul = $('#sentRows'); ul.textContent = '';
+  for (const r of [...sents].reverse()) {
+    const li = document.createElement('li'), tx = document.createElement('span'), dt = document.createElement('span'), del = document.createElement('button');
+    tx.className = 'tx'; tx.lang = 'th'; tx.textContent = r.lines.join(' / ');
+    dt.className = 'dt'; dt.textContent = r.t ? new Date(r.t).toLocaleDateString() : '';
+    del.className = 'icon'; del.setAttribute('aria-label', 'Delete this sentence'); del.innerHTML = '<svg class="i"><use href="#i-trash"/></svg>';
+    del.onclick = () => { if (!confirm('Delete this sentence? The app stops learning from it.')) return; sents = sents.filter(q => q !== r); rebuildCut(); saveSents(); renderSentList(); };
+    li.append(tx, dt, del); ul.append(li);
+  }
+}
+function setMode(m) {
+  tmode = m === 'sentences' ? m : 'letters'; LS.set('tmode', tmode);
+  $('#lettersPane').hidden = $('#lettersHud').hidden = tmode !== 'letters'; $('#sentPane').hidden = tmode === 'letters';
+  document.querySelectorAll('#teachMode button').forEach(b => { b.classList.toggle('on', b.dataset.m === tmode); b.setAttribute('aria-selected', b.dataset.m === tmode); });
+  if (tmode === 'letters') { renderTeach(); M.frame($('#padWrap')); } else { cancelAdv(); renderSentList(); renderSent(); M.frame($('#spadWrap')); }
+}
+function buildSent() {
+  const cv = spadCv();
+  attachPen(cv, {
+    pt: e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * spage.w).toFixed(3), +((e.clientY - r.top) / r.height * spage.lines.length * ROW).toFixed(3)]; },
+    down: () => { }, draw: drawSpad, end: pts => { sink.push(pts); drawSpad(); },
+  });
+  document.querySelectorAll('#teachMode button').forEach(b => (b.onclick = () => b.dataset.m !== tmode && setMode(b.dataset.m)));
+  $('#sUndo').onclick = () => { sink.pop(); drawSpad(); };
+  $('#sClear').onclick = () => { sink = []; drawSpad(); };
+  $('#sSkip').onclick = () => { if (!sink.length || confirm('Throw away what you wrote here and get other lines?')) newPage(); };
+  $('#sNext').onclick = () => {
+    if (!sink.length) return toast('Copy the lines on the pad first.');
+    sents.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), lines: spage.lines, s: sink, w: spage.w });
+    saveSents(); renderSentList(); toast(`Saved. ${sents.length} written so far.`, 2000); newPage(); cutAll();
+  };
+}
+
 // ---------- Worksheet screen
 let sheet = null, sel = null, down = null;
 const ink = { color: LS.get('color', '#1a1a1a'), thick: LS.get('thick', 1) };
@@ -237,7 +346,7 @@ const lay = b => {
   const key = layKey(b);
   let c = b.lc;
   if (!c || c.key !== key) {
-    const r = H.layout(b.text, hand, { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods });
+    const r = H.layout(b.text, use(), { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods });
     const e = r.ink = [Infinity, Infinity, -Infinity, -Infinity]; // what was written (a wide formula can pass the box edge)
     for (const a of [...r.strokes, ...r.fills]) for (let i = 0; i < a.length; i += 2) { e[0] = Math.min(e[0], a[i]); e[2] = Math.max(e[2], a[i]); e[1] = Math.min(e[1], a[i + 1]); e[3] = Math.max(e[3], a[i + 1]); }
     c = b.lc = { key, x: b.x, y: b.y, r };
@@ -542,7 +651,7 @@ function showTab(t) {
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   if (t !== 'teach') cancelAdv();
   M.tab($('#' + t));
-  if (t === 'teach') requestAnimationFrame(() => { renderTeach(); M.words($('#teachTitle')); M.frame($('#padWrap')); });
+  if (t === 'teach') requestAnimationFrame(() => { setMode(tmode); M.words($('#teachTitle')); });
   else if (sheet) sheet.pages.forEach(pg => { renderInk(pg); M.writeOn(pg.svg); });
   else { M.frame($('.term')); M.prompt($('#promptTxt'), 'เปิดใบงาน แล้วเขียนคำตอบ…'); }
 }
@@ -562,14 +671,14 @@ function wire() {
     if ($('#teach').hidden || e.target.matches('textarea, input')) return;
     if (e.key === 'ArrowRight') go(cur + 1, 1); else if (e.key === 'ArrowLeft') go(cur - 1, -1);
   });
-  addEventListener('resize', () => { if (!$('#teach').hidden) { cancelAdv(); renderTeach(); } });
+  addEventListener('resize', () => { if (!$('#teach').hidden) { cancelAdv(); renderTeach(); if (tmode === 'sentences' && spage) sizeSpad(); } });
   $('#openBtn').onclick = $('#openBtn2').onclick = () => $('#openFile').click();
   document.querySelectorAll('[data-tool]').forEach(b => (b.onclick = () => setTool(b.dataset.tool))); setTool(tool);
   document.querySelectorAll('#lassoMenu button').forEach(b => (b.onclick = e => { e.stopPropagation(); lassoAct(b.dataset.l); }));
   if (penSeen) document.body.classList.add('pen-seen');
   // iPad: no pinch zoom of the whole app; a Pencil on a drawing surface never scrolls the page
   for (const g of ['gesturestart', 'gesturechange']) document.addEventListener(g, e => e.preventDefault(), { passive: false });
-  document.addEventListener('touchmove', e => { if ([...e.touches].some(t => t.touchType === 'stylus') && e.target.closest('#pad, .page.lasso')) e.preventDefault(); }, { passive: false });
+  document.addEventListener('touchmove', e => { if ([...e.touches].some(t => t.touchType === 'stylus') && e.target.closest('#pad, #spad, .page.lasso')) e.preventDefault(); }, { passive: false });
   $('#openFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openFile(f); };
   $('#exportBtn').onclick = exportPdf;
   const inkBtns = document.querySelectorAll('.ink');
@@ -629,19 +738,19 @@ const SUPPORT_URL = ''; // paste a Ko-fi / PromptPay link here; empty = popup ha
 function openSupport() { $('#supLink').hidden = !SUPPORT_URL; if (SUPPORT_URL) $('#supLink').href = SUPPORT_URL; $('#support').hidden = false; }
 
 (async function init() {
-  buildTeach(); wire();
-  try { const h = await db.get('hand'); if (h && h.g) hand = h; } catch { toast('This browser blocks saving — use ⋯ → Save my handwriting file.', 6000); }
+  buildTeach(); buildSent(); wire();
+  try { const h = await db.get('hand'); if (h && h.g) hand = h; const s = await db.get('sents'); if (Array.isArray(s)) sents = s; } catch { toast('This browser blocks saving — use ⋯ → Save my handwriting file.', 6000); }
   try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch { }
   const refs = fetch('refs.json').then(r => r.json()).then(H.setRefs).catch(e => console.warn('reference hands', e)); // without them letters still vary, just less
   try { font = opentype.parse(await (await fetch('lib/Sriracha-Regular.ttf')).arrayBuffer()); } catch (e) { console.warn('fallback font', e); }
-  await refs; lastDone = taught();
+  await refs; lastDone = taught(); rebuildCut(); cutAll();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (/[?&]test\b/.test(location.search)) return runTests();
   showTab(LS.get('tab', 'teach'));
   if (!LS.get('intro', false)) showIntro();
 })();
 function showIntro() { // the app name written in the person's own hand (typed font for letters not taught yet)
-  const r = H.layout('ลายมือ', hand, { x: 0, y: 0, width: 1000, u: 60, gap: 2.4, seed: 7, fb, thick: 1, neat: 1 });
+  const r = H.layout('ลายมือ', use(), { x: 0, y: 0, width: 1000, u: 60, gap: 2.4, seed: 7, fb, thick: 1, neat: 1 });
   const all = [...r.pens.flatMap(([, s]) => s), ...r.fills]; let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
   for (const a of all) for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); }
   const m = 12, svg = all.length ? `<svg viewBox="${x0 - m} ${y0 - m} ${x1 - x0 + 2 * m} ${y1 - y0 + 2 * m}">${stkPaths(r, 'currentColor')}${r.fills.length ? `<path class="fil" d="${pathD(r.fills, true)}" fill="currentColor"/>` : ''}</svg>` : 'ลายมือ';
