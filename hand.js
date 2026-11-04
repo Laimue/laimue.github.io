@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 27; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 28; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -1243,6 +1243,7 @@
   // must never reach the library, a missed one costs nothing.
   const CUTV = 2, SURE = 0.07; // centre-line distance (cdist): real sentence ink vs the same person's taught letter 0.02-0.07 (fakes 0.02-0.04), look-alikes further
   const CUT_BASES = [...(GROUPS[0][1] + GROUPS[1][1] + GROUPS[2][1] + 'ฃฅฦ')].filter(c => !isMark(c)), CUT_UP = [...UPPER, ...TOP], CUT_LO = [...LOWER];
+  const CUT_EN = [...GROUPS[7][1] + GROUPS[3][1]], LATIN = /[A-Za-z]/, NOCUT = /[\p{P}\p{S}]/u; // English look-alikes: letters + digits; punctuation is lined up but never cut
   const ILOOK = new WeakMap();
   function inkLook(v) { // a drawn letter seen the way typedLook sees a font letter: distance to its visible ink, its ink cells
     let c = ILOOK.get(v); if (c) return c;
@@ -1286,7 +1287,7 @@
   function alts(ch, fb) { // the 6 letters most like this one as typed: what a cut could be mistaken for
     let a = ALT.get(fb); if (!a) ALT.set(fb, a = {}); if (a[ch]) return a[ch];
     const r = fb(ch); if (!r || !r.p) return (a[ch] = []);
-    const st = trace(typedLook(r, 0)), mark = needsGhost(ch), pool = mark ? (LOWER.has(ch) ? CUT_LO : CUT_UP) : CUT_BASES;
+    const st = trace(typedLook(r, 0)), mark = needsGhost(ch), pool = LATIN.test(ch) ? CUT_EN.filter(c => c.toLowerCase() !== ch.toLowerCase()) : mark ? (LOWER.has(ch) ? CUT_LO : CUT_UP) : CUT_BASES;
     return (a[ch] = pool.filter(c => c !== ch && fb(c) && fb(c).p).map(c => [c, fitTo(st, typedLook(fb(c), 0), tbox(fb(c)), mark, true)]).sort((p, q) => p[1] - q[1]).slice(0, 6).map(p => p[0]));
   }
   // sure: close to its letter, and clearly closer to it than to any look-alike
@@ -1309,11 +1310,11 @@
     return bx.flatMap((q, j) => { const inf = { t: q.t }, off = parse(text.slice(0, q.i)).length; info.words.push(inf); return cutText(q.t, parts[j], hand, fb, P, inf).map(p => ({ ...p, r, ci: p.ci + off })); });
   }
   function cutText(text, sts, hand, fb, P, info) { // strokes of one row (or one word box) that should read this text
-    const out = [], up = [], lo = [], atoms = [];
+    const out = [], up = [], lo = [], atoms = [], th = /[฀-๿]/.test(text); // no Thai: no marks, every stroke is part of a letter (i dots, t bars)
     for (const a of sts.map(a => [a, bbox({ s: [a] })]).sort((p, q) => p[1].x0 - q[1].x0)) {
       const [s, b] = a;
-      if (b.y1 <= XH + 0.12) { up.push({ s: [s], b }); continue; }
-      if (b.y0 >= BASE - 0.12) { lo.push({ s: [s], b }); continue; }
+      if (th && b.y1 <= XH + 0.12) { up.push({ s: [s], b }); continue; }
+      if (th && b.y0 >= BASE - 0.12) { lo.push({ s: [s], b }); continue; }
       const t = atoms[atoms.length - 1], ov = t ? Math.min(t.b.x1, b.x1) - Math.max(t.b.x0, b.x0) : -1;
       if (t && ov >= 0.5 * Math.min(t.b.x1 - t.b.x0, b.x1 - b.x0)) { t.s.push(s); t.b = sbox(t.s); } else atoms.push({ s: [s], b }); // strokes stacked on each other: one letter
     }
@@ -1379,7 +1380,7 @@
     });
     info.d = pieces.map(p => p.ch + (p.d === null ? '?' : '')).join(''); info.pc = pieces;
     if (pieces.filter(p => p.raw <= 2 * SURE).length < 0.5 * pieces.length) return out; // most of it doesn't even look like the text: another text
-    for (const p of pieces) if (p.d !== null) {
+    for (const p of pieces) if (p.d !== null && !NOCUT.test(p.ch)) {
       const b = sbox(p.s), dx = p.dx != null ? p.dx : GX + HW - b.x0;
       out.push({ ch: p.ch, s: p.s.map(a => a.map((v, i) => +(i % 2 ? v : v + dx).toFixed(3))), d: +p.d.toFixed(4), ci: p.ci, b: [b.x0, b.y0, b.x1, b.y1].map(q => +q.toFixed(3)) }); // b: where it was on the row (row units)
     }
@@ -1487,6 +1488,14 @@
       t('cut: joined, scribbled, slipped letters and a wrong row never kept', !bad.length && !e.wrong.length && e.right > 15, bad.map(p => p.ch + p.r + ':' + p.ci).join(' ') + ' | ' + e.wrong.join(' ') + ' kept ' + e.right);
       const pc = a.c.p.find(p => !isMark(p.ch)), h2 = { g: neat.g, c: { [pc.ch]: [{ s: pc.s, w: 2 }] } }, P2 = person(neat, fb), v2 = variantsFor(h2, pc.ch, fb, P2);
       t('cut letters join the library with their weight', v2.length === 2 && v2.w.join() === '1,2' && !variantsFor(neat, pc.ch, fb, P2).w, pc.ch);
+      // v28: English lines (one per page, no boxes): i dots / t bars stay with their letter, punctuation is never cut
+      const en = ['The quick brown fox jumps over the lazy dog', 'I think it is time to go home.'], ea = { right: 0, n: 0, wrong: [], punct: 0 };
+      for (const [l, o, h] of [[en[0], { seed: 3 }, neat], [en[1], { seed: 3 }, neat], [en[0], { seed: 12, messy: true, gap: 0.1 }, messy]]) {
+        const rec = fakeSentence(fb, [l], { ...o, noBoxes: true }), c = cut(rec, h, fb), k = o.messy ? 'm' : 'n';
+        ea[k] = (ea[k] || 0) + c.p.filter(p => at(rec, p)).length; ea[k + 'n'] = (ea[k + 'n'] || 0) + rec.truth.filter(q => /[A-Za-z]/.test(q.ch)).length;
+        ea.wrong.push(...c.p.filter(p => !at(rec, p)).map(p => p.ch + p.ci)); ea.punct += c.p.filter(p => !/[A-Za-z]/.test(p.ch)).length;
+      }
+      t('cut English: half the letters of a neat copy, none wrong, no punctuation', ea.n >= 0.5 * ea.nn && ea.m >= 0.3 * ea.mn && !ea.wrong.length && !ea.punct, ea.n + '/' + ea.nn + ' messy ' + ea.m + '/' + ea.mn + ' ' + ea.wrong.join(' '));
     }
     const kii = C('กี่'); t('กี่ tone above vowel', kii[2].y1 <= kii[1].y0, kii[2].y1.toFixed(2) + ' <= ' + kii[1].y0.toFixed(2));
     const kak = C('กั๊'); t('กั๊ tone above mai han-akat', kak[2].y1 <= kak[1].y0);

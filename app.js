@@ -8,6 +8,18 @@ const LS = {
 };
 function doneToast(msg) { toast(msg, 2500); const t = $('#toast'), d = document.createElement('span'); d.className = 'lot tick'; t.prepend(d); M.icon(d, 'done'); }
 function toast(msg, ms = 3500) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.h); toast.h = setTimeout(() => (t.hidden = true), ms); }
+// in-app confirm (replaces the browser's confirm()): resolves true / false. danger = the safe button (Cancel) has focus.
+function ask(title, msg, { ok = 'OK', no = 'Cancel', danger = false } = {}) {
+  const d = $('#ask'), y = $('#askOk'), n = $('#askNo'), back = document.activeElement, t = $('#askT');
+  t.textContent = title; delete t.dataset.split; $('#askM').textContent = msg; y.textContent = ok; n.textContent = no; y.classList.toggle('danger', danger);
+  d.hidden = false; M.pop(d.firstElementChild, t); (danger ? n : y).focus();
+  return new Promise(res => {
+    const done = v => { d.hidden = true; d.onkeydown = d.onclick = y.onclick = n.onclick = null; if (back && back.focus) back.focus({ preventScroll: true }); res(v); };
+    y.onclick = () => done(true); n.onclick = () => done(false);
+    d.onclick = e => { if (e.target === d) done(false); };
+    d.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); done(false); } else if (e.key === 'Tab') { e.preventDefault(); (document.activeElement === y ? n : y).focus(); } };
+  });
+}
 addEventListener('error', e => toast('Error: ' + e.message, 8000));
 addEventListener('unhandledrejection', e => toast('Error: ' + (e.reason && e.reason.message || e.reason), 8000));
 
@@ -32,6 +44,7 @@ const fb = ch => (ch in fbCache ? fbCache[ch] : (fbCache[ch] = font ? H.fontVari
 const saveHand = () => { handGen++; clearTimeout(saveT); saveT = setTimeout(() => db.set('hand', hand).catch(() => toast('Could not save on this device — use ⋯ → Save my handwriting file.', 6000)), 300); };
 // written sentences: their own key (hand is rewritten on every letter stroke), saved only on Next / delete; in the backup file as `sn`
 let sents = [], cutG = {}, cutting = false;
+const justSaved = new Set(); // sentences saved this session: their cut letters get the "learned" card (old ones re-cut at start don't)
 const saveSents = () => { handGen++; return db.set('sents', sents).catch(() => toast('Could not save on this device — use ⋯ → Save my handwriting file.', 6000)); };
 const use = () => ({ g: hand.g, c: cutG }); // what the engine writes with: taught letters + letters cut from sentences
 function rebuildCut() { // newest first; a newer sentence's letters weigh a bit more, old ones still count
@@ -48,6 +61,7 @@ async function cutAll() { // cut sentences into letters in the background, one r
       try { for (let i = 0; i < r.lines.length; i++) { await new Promise(res => setTimeout(res, 30)); p.push(...H.cutRow(r, i, hand, fb)); } }
       catch (e) { console.warn('cut', e); p = []; } // a page it can't read teaches nothing
       if (sents.includes(r)) { r.cut = { v: H.CUTV, p }; rebuildCut(); saveSents(); }
+      if (justSaved.delete(r) && p.length) { const chs = [...new Set(p.map(q => q.ch))]; if (!M.learned(chs, $('#sentRows li'))) toast(`Learned ${chs.length} letters: ${chs.join(' ')}`, 2500); }
     }
   } finally { cutting = false; }
 }
@@ -67,7 +81,7 @@ function validSents(list) { // trust boundary too: the sentences part of a picke
   if (!Array.isArray(list)) return [];
   return list.filter(r => r && Array.isArray(r.lines) && r.lines.length >= 1 && r.lines.length <= 3 && r.lines.every(l => typeof l === 'string' && l.length <= 200)
     && Array.isArray(r.s) && r.s.length && r.s.length <= 3000 && r.s.every(okStroke) && Number.isFinite(r.w) && r.w > 0 && r.w < 100)
-    .map(r => ({ id: String(r.id || Math.random().toString(36).slice(2)).slice(0, 40), t: Number.isFinite(r.t) ? r.t : 0, lines: r.lines, s: r.s, w: r.w, boxes: okBoxes(r.boxes, r.lines.length) }));
+    .map(r => ({ id: String(r.id || Math.random().toString(36).slice(2)).slice(0, 40), t: Number.isFinite(r.t) ? r.t : 0, lines: r.lines, s: r.s, w: r.w, boxes: okBoxes(r.boxes, r.lines.length), tw: Number.isFinite(r.tw) && r.tw > 0 && r.tw < 100 ? r.tw : undefined, lang: r.lang === 'en' ? 'en' : 'th' }));
 }
 function okBoxes(b, rows) { // word boxes of a page (v25+); anything odd: none (the cutter then reads the whole row)
   return Array.isArray(b) && b.length <= 80 && b.every(q => q && Number.isInteger(q.r) && q.r >= 0 && q.r < rows && Number.isFinite(q.x0) && Number.isFinite(q.x1) && q.x0 < q.x1 && q.x1 < 100
@@ -95,12 +109,12 @@ const saveHandFile = () => saveFile(new Blob([JSON.stringify({ ...hand, sn: sent
 async function loadHandFile(file) {
   let h = null, sn = []; try { const o = JSON.parse(await file.text()); h = validHand(o); sn = validSents(o.sn); } catch { }
   if (!h) return toast('That is not a LaiMue handwriting file.');
-  if ((taught() || sents.length) && !confirm('Replace the handwriting on this device (letters and written sentences) with this file?')) return;
+  if ((taught() || sents.length) && !(await ask('Replace your handwriting?', 'The letters and sentences on this device are replaced with this file.', { ok: 'Replace', danger: true }))) return;
   hand = h; sents = sn; rebuildCut(); saveHand(); saveSents(); cutAll(); renderTeach(); renderSentList(); if (sheet) sheet.pages.forEach(renderInk); toast('Handwriting loaded');
 }
-function clearHand() {
+async function clearHand() {
   if (!taught() && !sents.length) return toast('There are no letters to clear yet.');
-  if (!confirm('Erase ALL the letters and sentences you wrote on this device and start again? This cannot be undone. If you might want them back, tap Cancel and use "Save my handwriting file" first.')) return;
+  if (!(await ask('Erase everything?', 'All the letters and sentences you wrote on this device are erased. This cannot be undone. If you might want them back, tap Cancel and use "Save my handwriting file" first.', { ok: 'Erase all', danger: true }))) return;
   hand = { v: 1, g: {} }; sents = []; rebuildCut(); saveHand(); saveSents(); renderTeach(); renderSentList(); if (sheet) sheet.pages.forEach(renderInk); toast('All letters cleared. Write them again on the Teach tab.');
 }
 
@@ -176,7 +190,7 @@ function buildTeach() {
     end: pts => { const l = slots(CHARS[cur].ch); l[ver] = { s: [...(l[ver] ? l[ver].s : []), pts] }; dirty = true; saveHand(); drawPad(); drawChip(cur); progress(); queueAdv(); },
   });
   $('#undo').onclick = () => edit(s => (s.pop(), s));
-  $('#clear').onclick = () => edit(() => []);
+  $('#clear').onclick = () => { if (slots(CHARS[cur].ch)[ver]) M.strike(padCv()); edit(() => []); };
   $('#prev').onclick = $('#ghostPrev').onclick = () => go(cur - 1, -1);
   $('#next').onclick = $('#ghostNext').onclick = () => go(cur + 1, 1);
   $('#pvWrap').ontoggle = renderPreview;
@@ -188,13 +202,15 @@ function edit(fn) { // variants are replaced, never mutated (the engine caches t
   const s = fn(l[ver].s.slice()); l[ver] = s.length ? { s } : null;
   saveHand(); drawPad(); drawChip(cur); progress();
 }
+let inkT = 0, inkMs = 0; // pen-down time this session, shown as t = mm:ss in the header (updated on lift only)
+const clock = () => { const s = Math.round(inkMs / 1000); $('#clock').textContent = 't = ' + String(s / 60 | 0).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
 // a drawing surface; o.pt(e) -> [x, y] in box units, o.down() before a stroke, o.draw() while inking, o.end(points)
 function attachPen(cv, o) {
   cv.addEventListener('pointerdown', e => {
     if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); document.body.classList.add('pen-seen'); }
     if ((e.pointerType === 'touch' && penSeen) || drawing) return; // palm rejection once a Pencil was used
     e.preventDefault(); try { cv.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
-    o.down();
+    o.down(); inkT = performance.now();
     document.body.classList.add('inking');
     drawing = { id: e.pointerId, pts: o.pt(e) }; o.draw();
   });
@@ -209,7 +225,7 @@ function attachPen(cv, o) {
   });
   const end = e => {
     if (!drawing || drawing.id !== e.pointerId) return;
-    const d = drawing; drawing = null; document.body.classList.remove('inking');
+    const d = drawing; drawing = null; document.body.classList.remove('inking'); inkMs += performance.now() - inkT; clock();
     o.end(d.pts);
   };
   cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', end);
@@ -237,7 +253,7 @@ function centreStrip(smooth = true) {
 }
 function meta() {
   const c = CHARS[cur], n = String(cur + 1).padStart(2, '0');
-  $('#hudPos').textContent = `Letter ${n} / ${N}`; $('#hudGrp').textContent = c.group;
+  $('#hudPos').textContent = `Letter ${n} / ${N}`; $('#figL').textContent = 'fig.' + n; $('#hudGrp').textContent = c.group;
   document.querySelectorAll('#verRow button').forEach(b => b.classList.toggle('on', +b.dataset.v === ver));
   if ($('#pvWrap').open) renderPreview();
 }
@@ -258,43 +274,70 @@ function progress() {
   $('#rulerHead').style.left = (100 * done / REQ.length) + '%';
   $('#progText').textContent = `${done}/${REQ.length} taught`;
   const first = lastDone >= 0 && lastDone < REQ.length && done === REQ.length; lastDone = done;
-  if (first && !M.flash('ครบแล้ว.')) doneToast('All letters taught');
+  if (first && !M.flash('ครบแล้ว · all letters taught', null, null, { at: $('#progText') })) doneToast('All letters taught'); // the ember already runs the track (CSS)
   if (done === REQ.length && !LS.get('doneNag', false)) {
     LS.set('doneNag', true);
-    setTimeout(() => { if (confirm('All letters taught. Save your handwriting file now as a backup?')) saveHandFile(); }, 1600);
+    setTimeout(async () => { if (await ask('All letters taught.', 'Save your handwriting file now as a backup?', { ok: 'Save file', no: 'Later' })) saveHandFile(); }, 1600);
   }
 }
 
-// ---------- Sentences: copy one real Thai sentence on one ruled line (BOX_H high, in box units). Each written page is a
-// record {id, t, lines, s: strokes over the whole pad, w: pad width} that teaches the engine.
-let bank = null, spage = LS.get('spage', null), sink = [], spadU = 0, tmode = LS.get('tmode', 'letters');
+// ---------- Sentences: copy one real sentence (Thai or English) on one ruled line (BOX_H high, in box units). Each written
+// page is a record {id, t, lines, s: strokes over the whole pad, w: pad width, tw: typed width, lang} that teaches the engine.
+let slang = LS.get('slang', 'th') === 'en' ? 'en' : 'th', sink = [], spadU = 0, tmode = LS.get('tmode', 'letters'), wEnds = [];
+const banks = {}, pkey = () => (slang === 'en' ? 'spage.en' : 'spage'); // one waiting page per language ('spage' = the Thai one, as before)
+let spage = LS.get(pkey(), null);
 const ROW = H.BOX_H, spadCv = () => $('#spad');
-const loadBank = () => (bank ? Promise.resolve(bank) : fetch('bank.json').then(r => r.json()).then(b => (bank = b)));
+const loadBank = lang => (banks[lang] ? Promise.resolve(banks[lang]) : fetch(lang === 'en' ? 'bank-en.json' : 'bank.json').then(r => r.json()).then(b => (banks[lang] = b)));
 function have() { // samples of each letter so far: taught versions + letters cut from sentences (+ a little for each time written)
   const n = {}; for (const c of CHARS) n[c.ch] = count(c.ch);
   for (const ch in cutG) n[ch] = (n[ch] || 0) + cutG[ch].length;
   for (const r of sents) for (const c of r.lines.join('')) n[c] = (n[c] || 0) + 0.3;
   return n;
 }
-async function newPage(anim) { // one one-line sentence per page on one ruled line (no word boxes: the cutter reads the whole row); anim: the card swaps like a letter
-  let b; try { b = await loadBank(); } catch { return toast('Could not load the sentences. Check the internet once, then try again.'); }
-  const one = b.filter(i => i.length === 1 && i[0].replace(/[ัิ-ฺ็-๎ ]/g, '').length <= 14); // ≤14 letters: a line short enough for handwriting size on an iPad (the picker prefers long ones)
+const typedX = t => { const cb = H.layout(t, null, { x: 0, y: 0, width: 1e4, u: 1, seed: 1, fb }).cb.filter(Boolean); return cb.length ? [Math.min(...cb.map(c => c[0])), Math.max(...cb.map(c => c[2]))] : [0, 8]; }; // typed ink from-to, box units
+async function newPage(anim, dir = 1) { // one one-line sentence per page on one ruled line (no word boxes: the cutter reads the whole row); anim: the card swaps and the sentence writes on
+  const lang = slang; let b; $('#sentText').classList.toggle('loading', !banks[lang]);
+  try { b = await loadBank(lang); } catch { return toast('Could not load the sentences. Check the internet once, then try again.'); } finally { $('#sentText').classList.remove('loading'); }
+  if (lang !== slang) return; // switched language while loading
+  const one = b.filter(i => i.length === 1 && (lang === 'en' || i[0].replace(/[ัิ-ฺ็-๎ ]/g, '').length <= 14)); // Thai ≤14 letters: short enough for handwriting size on an iPad (the picker prefers long ones); the English bank is width-capped already
   const p = H.pickLines(one, have(), new Set(sents.flatMap(r => [...r.lines, r.lines.join('').replace(/ /g, '')])), Math.random, 1, 1);
   if (!p.lines.length) return toast('You have written every sentence!');
-  const cb = H.layout(p.lines[0], null, { x: 0, y: 0, width: 1e4, u: 1, seed: 1, fb }).cb.filter(Boolean), tw = cb.length ? Math.max(...cb.map(c => c[2])) - Math.min(...cb.map(c => c[0])) : 8;
-  const w = +Math.max(11, 1.3 * tw + 1).toFixed(2), go = () => { spage = { lines: [p.lines[0]], w }; LS.set('spage', spage); sink = []; renderSent(); }; // room for the hand: 1.3x the typed width
-  if (anim) M.swap([$('#sentText'), spadCv()], 1, go); else go();
+  const [a, z] = typedX(p.lines[0]), tw = z - a;
+  const w = +Math.max(11, 1.3 * tw + 1).toFixed(2), go = () => { spage = { lines: [p.lines[0]], w, tw: +tw.toFixed(2), lang }; LS.set(pkey(), spage); sink = []; renderSent(); if (anim) M.type($('#sentText li')); }; // room for the hand: 1.3x the typed width
+  if (anim) M.swap([$('#sentText'), spadCv()], dir, go); else go();
+}
+function words(s, lang) { // [text, isSpace] pieces: words (punctuation stays on the word before it) and the spaces between
+  const seg = typeof Intl.Segmenter === 'function' ? [...new Intl.Segmenter(lang, { granularity: 'word' }).segment(s)] : s.split(/(\s+)/).filter(Boolean).map(t => ({ segment: t, isWordLike: true }));
+  const out = [];
+  for (const g of seg) {
+    const t = g.segment, sp = /^\s+$/.test(t), last = out[out.length - 1];
+    if (sp) out.push([t, true]); else if (!g.isWordLike && last && !last[1]) last[0] += t; else out.push([t, false]);
+  }
+  return out;
 }
 function renderSent() {
-  if (!spage || spage.boxes || spage.lines.length !== 1) return newPage(); // a v25 page (boxes, rows) is swapped for a one-line one
-  const ol = $('#sentText'); ol.textContent = '';
-  for (const l of spage.lines) { const li = document.createElement('li'); li.textContent = l; ol.append(li); }
-  sizeSpad();
+  if (!spage || spage.boxes || spage.lines.length !== 1 || (spage.lang || 'th') !== slang) return newPage(); // a v25 page (boxes, rows) is swapped for a one-line one
+  const ol = $('#sentText'), li = document.createElement('li'), line = spage.lines[0], [x0, x1] = typedX(line);
+  if (!spage.tw) spage.tw = +(x1 - x0).toFixed(2); // a page from before v28
+  ol.textContent = ''; ol.lang = slang; wEnds = []; let pre = '';
+  for (const [t, sp] of words(line, slang)) { // karaoke word spans; each word's typed end (prefix layouts: same seed, same places)
+    pre += t; if (sp) { li.append(t); continue; }
+    const w = document.createElement('span'); w.className = 'w'; w.textContent = t; li.append(w); wEnds.push(typedX(pre)[1] - x0);
+  }
+  ol.append(li);
+  $('#sentFig').textContent = `FIG.02 — Sentence ${String(sents.length + 1).padStart(3, '0')} · ${slang.toUpperCase()}`;
+  sizeSpad(); kara();
 }
 function sizeSpad() {
-  const st = $('.sstage'), cv = spadCv(), rows = spage.lines.length; if (!st.clientWidth) return;
-  spadU = Math.min(st.clientWidth / spage.w, st.clientHeight / (rows * ROW), 56); // ≤56px between the x-height and base lines (~11 mm on iPad): handwriting size
+  const st = $('.sstage'), cv = spadCv(), rows = spage.lines.length, mg = matchMedia('(max-width: 640px)').matches ? 0 : 34;
+  st.classList.remove('fit'); st.style.height = ''; if (!st.clientWidth) return; // measure the free room, then hug the card so the sentence, pad and buttons sit together
+  spadU = Math.min((st.clientWidth - 2 * mg) / spage.w, (st.clientHeight - 30) / (rows * ROW), 56); // ≤56px between the x-height and base lines (~11 mm on iPad): handwriting size; room for the margin labels and the ruler
   cv.style.width = spage.w * spadU + 'px'; cv.style.height = rows * ROW * spadU + 'px';
+  $('#spadWrap').style.setProperty('--u', spadU + 'px'); st.style.height = rows * ROW * spadU + 46 + 'px'; st.classList.add('fit');
+  const ru = $('#sRuler'), step = 2 * spadU < 40 ? 4 : 2; ru.querySelectorAll('b').forEach(b => b.remove());
+  for (let u = 0, i = 0; u <= spage.w; u += step, i++) { const b = document.createElement('b'); b.textContent = u; b.style.left = u / spage.w * 100 + '%'; b.style.setProperty('--i', i); ru.append(b); }
+  const ol = $('#sentText'); ol.style.fontSize = ''; const k = ol.clientWidth / ol.scrollWidth; // the sentence stays on one line
+  if (k < 1) ol.style.fontSize = parseFloat(getComputedStyle(ol).fontSize) * k * 0.98 + 'px';
   drawSpad();
 }
 function drawSpad() {
@@ -312,38 +355,64 @@ function drawSpad() {
   for (const a of sink) strokeLine(x, a);
   if (drawing) strokeLine(x, drawing.pts);
 }
-function renderSentList() {
+function inkX(s) { let a = Infinity, b = -Infinity; for (const p of s) for (let i = 0; i < p.length; i += 2) { if (p[i] < a) a = p[i]; if (p[i] > b) b = p[i]; } return [a, b]; }
+function ratio() { // how much wider this person writes than the typed line: median of their last 5 pages; 1.2 until known
+  const r = sents.filter(q => q.tw).slice(-5).map(q => { const [a, b] = inkX(q.s); return (b - a) / q.tw; }).sort((a, b) => a - b);
+  return r.length ? Math.min(1.6, Math.max(0.8, r[r.length >> 1])) : 1.2;
+}
+function kara() { // karaoke, on pen-up only: words copied so far go ink, the one being copied orange, the rest wait faint; the ember marks the last lift
+  const on = sink.length > 0, [a, b] = inkX(sink), got = on ? (b - a) / ratio() + 0.1 : -1; let cur = false;
+  document.querySelectorAll('#sentText .w').forEach((w, i) => { const d = on && wEnds[i] <= got, c = on && !d && !cur; if (c) cur = true; w.classList.toggle('done', d); w.classList.toggle('cur', c); });
+  $('#sentText').classList.toggle('kara', on); // a fresh sentence reads in full
+  const h = $('#sHead'); h.hidden = !on; if (on) h.style.left = b / spage.w * 100 + '%';
+}
+function renderSentList() { // the filmstrip: newest first, each card the written ink (one SVG path: light even with hundreds of pages)
   $('#sentN').textContent = sents.length;
   const ul = $('#sentRows'); ul.textContent = '';
   for (const r of [...sents].reverse()) {
-    const li = document.createElement('li'), tx = document.createElement('span'), dt = document.createElement('span'), del = document.createElement('button');
-    tx.className = 'tx'; tx.lang = 'th'; tx.textContent = r.lines.join(' / ');
-    dt.className = 'dt'; dt.textContent = r.t ? new Date(r.t).toLocaleDateString() : '';
+    const li = document.createElement('li'), sv = document.createElementNS(NS, 'svg'), pa = document.createElementNS(NS, 'path'), tg = document.createElement('span'), del = document.createElement('button'), txt = r.lines.join(' / ');
+    sv.setAttribute('viewBox', `0 0 ${r.w} ${ROW}`); sv.setAttribute('aria-hidden', 'true');
+    pa.setAttribute('d', r.s.map(a => 'M' + a[0] + ' ' + a[1] + (a.length > 2 ? 'L' + a.slice(2).join(' ') : 'h.001')).join(''));
+    for (const [k, v] of [['fill', 'none'], ['stroke', '#141414'], ['stroke-width', '0.075'], ['stroke-linecap', 'round'], ['stroke-linejoin', 'round']]) pa.setAttribute(k, v); // on the path: the Next flight clones it outside the strip
+    sv.append(pa); li.title = txt; li.setAttribute('aria-label', txt);
+    tg.className = 'tag mono'; tg.textContent = r.lang === 'en' ? 'EN' : 'TH';
     del.className = 'icon'; del.setAttribute('aria-label', 'Delete this sentence'); del.innerHTML = '<svg class="i"><use href="#i-trash"/></svg>';
-    del.onclick = () => { if (!confirm('Delete this sentence? The app stops learning from it.')) return; sents = sents.filter(q => q !== r); rebuildCut(); saveSents(); renderSentList(); };
-    li.append(tx, dt, del); ul.append(li);
+    del.onclick = async () => { if (!(await ask('Delete this sentence?', 'The app stops learning from it.', { ok: 'Delete', danger: true }))) return; sents = sents.filter(q => q !== r); rebuildCut(); saveSents(); setTimeout(renderSentList, M.strike(li) * 1000); };
+    li.append(sv, tg, del); ul.append(li);
   }
 }
-function setMode(m) {
+const langBtns = () => document.querySelectorAll('#sentLang button').forEach(b => { b.classList.toggle('on', b.dataset.l === slang); b.setAttribute('aria-pressed', b.dataset.l === slang); });
+const TITLES = { letters: 'Teach your <em>hand.</em>', sentences: 'Copy one <em>line.</em>' };
+function setMode(m, anim) {
   tmode = m === 'sentences' ? m : 'letters'; LS.set('tmode', tmode);
-  $('#lettersPane').hidden = $('#lettersHud').hidden = tmode !== 'letters'; $('#sentPane').hidden = tmode === 'letters';
+  const tt = $('#teachTitle'); if (tt.dataset.m !== tmode) { tt.innerHTML = TITLES[tmode]; tt.dataset.m = tmode; delete tt.dataset.split; }
+  $('#lettersPane').hidden = $('#lettersHud').hidden = tmode !== 'letters'; $('#sentPane').hidden = $('#sentLang').hidden = $('#sentFig').hidden = tmode === 'letters';
   document.querySelectorAll('#teachMode button').forEach(b => { b.classList.toggle('on', b.dataset.m === tmode); b.setAttribute('aria-selected', b.dataset.m === tmode); });
-  if (tmode === 'letters') { renderTeach(); M.frame($('#padWrap')); } else { cancelAdv(); renderSentList(); renderSent(); M.frame($('#spadWrap')); }
+  if (tmode === 'letters') { renderTeach(); M.frame($('#padWrap')); } else { cancelAdv(); langBtns(); renderSentList(); renderSent(); M.frame($('#spadWrap')); }
+  if (anim) { M.tab($(tmode === 'letters' ? '#lettersPane' : '#sentPane'), tmode === 'letters' ? -1 : 1); M.type(tt); if (tmode === 'sentences') M.type($('#sentText li'), 0.2); }
+  M.focus($(tmode === 'letters' ? '#padWrap' : '#spadWrap'));
 }
 function buildSent() {
   const cv = spadCv();
   attachPen(cv, {
     pt: e => { const r = cv.getBoundingClientRect(); return [+((e.clientX - r.left) / r.width * spage.w).toFixed(3), +((e.clientY - r.top) / r.height * spage.lines.length * ROW).toFixed(3)]; },
-    down: () => { }, draw: drawSpad, end: pts => { sink.push(pts); drawSpad(); },
+    down: () => { }, draw: drawSpad, end: pts => { sink.push(pts); drawSpad(); kara(); },
   });
-  document.querySelectorAll('#teachMode button').forEach(b => (b.onclick = () => b.dataset.m !== tmode && setMode(b.dataset.m)));
-  $('#sUndo').onclick = () => { sink.pop(); drawSpad(); };
-  $('#sClear').onclick = () => { sink = []; drawSpad(); };
-  $('#sSkip').onclick = () => { if (!sink.length || confirm('Throw away what you wrote here and get another sentence?')) newPage(true); };
+  document.querySelectorAll('#teachMode button').forEach(b => (b.onclick = () => b.dataset.m !== tmode && setMode(b.dataset.m, true)));
+  document.querySelectorAll('#sentLang button').forEach(b => (b.onclick = async () => {
+    const l = b.dataset.l, dir = l === 'en' ? 1 : -1; if (l === slang) return;
+    if (sink.length && !(await ask(l === 'en' ? 'Switch to English?' : 'Switch to Thai?', 'What you wrote here is thrown away.', { ok: 'Switch', no: 'Keep writing' }))) return;
+    slang = l; LS.set('slang', l); langBtns(); sink = []; spage = LS.get(pkey(), null); // that language's waiting page, if any
+    if (spage && !spage.boxes && (spage.lang || 'th') === l) M.swap([$('#sentText'), spadCv()], dir, () => { renderSent(); M.type($('#sentText li')); }); else newPage(true, dir);
+  }));
+  $('#sUndo').onclick = () => { sink.pop(); drawSpad(); kara(); };
+  $('#sClear').onclick = () => { const n = sink.length; if (n) setTimeout(() => { sink = sink.slice(n); drawSpad(); kara(); }, M.strike(spadCv()) * 1000); }; // ink is wiped after the strike; a stroke begun meanwhile stays
+  $('#sSkip').onclick = async () => { if (!sink.length || await ask('Another sentence?', 'What you wrote here is thrown away.', { ok: 'New sentence', no: 'Keep writing' })) newPage(true); };
   $('#sNext').onclick = () => {
     if (!sink.length) return toast('Copy the lines on the pad first.');
-    sents.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), lines: spage.lines, s: sink, w: spage.w });
-    saveSents(); renderSentList(); toast(`Saved. ${sents.length} written so far.`, 2000); newPage(true); cutAll();
+    const r = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), t: Date.now(), lines: spage.lines, s: sink, w: spage.w, tw: spage.tw, lang: slang };
+    sents.push(r); justSaved.add(r); saveSents(); renderSentList(); M.into($('#sentRows li svg'), spadCv()); // the written line shrinks into its card
+    toast(`Saved. ${sents.length} written so far.`, 2000); newPage(true); cutAll();
   };
 }
 
@@ -618,7 +687,7 @@ function lassoEvents(pg) {
 }
 
 const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255);
-async function buildPdf() {
+async function buildPdf(onPage) { // onPage(i): progress, with a short pause so the screen can show it
   const P = PDFLib; let pdf;
   if (sheet.kind === 'pdf') pdf = await P.PDFDocument.load(sheet.bytes, { ignoreEncryption: true });
   else {
@@ -626,8 +695,10 @@ async function buildPdf() {
     pdf.addPage([pg.w, pg.h]).drawImage(img, { x: 0, y: 0, width: pg.w, height: pg.h });
   }
   const [r, g, b] = hex(ink.color);
-  sheet.pages.forEach((pg, i) => {
-    if (!pg.boxes.length) return;
+  for (let i = 0; i < sheet.pages.length; i++) {
+    const pg = sheet.pages[i];
+    if (onPage) { onPage(i); await new Promise(res => setTimeout(res, 40)); }
+    if (!pg.boxes.length) continue;
     const map = pg.vp ? (x, y) => pg.vp.convertToPdfPoint(x, y) : (x, y) => [x, pg.h - y]; // handles rotated / offset PDF pages
     const ops = [P.pushGraphicsState(), P.setStrokingRgbColor(r, g, b), P.setFillingRgbColor(r, g, b), P.setLineCap(P.LineCapStyle.Round), P.setLineJoin(P.LineJoinStyle.Round)];
     const path = (a, close) => {
@@ -643,27 +714,33 @@ async function buildPdf() {
     ops.push(P.popGraphicsState());
     const page = pdf.getPage(i);
     for (let j = 0; j < ops.length; j += 4000) page.pushOperators(...ops.slice(j, j + 4000));
-  });
+  }
   return pdf.save();
 }
 async function exportPdf() {
   if (!sheet) return; select(null);
-  const btn = $('#exportBtn'); btn.disabled = true;
-  try { await saveFile(new Blob([await buildPdf()], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf'); if (!M.flash('SAVED.')) doneToast('PDF saved'); if (!LS.get('support', false)) { LS.set('support', true); setTimeout(openSupport, 1800); } }
-  catch (e) { console.error(e); toast('Could not make the PDF: ' + e.message, 6000); }
+  const btn = $('#exportBtn'), lb = btn.querySelector('span'), n = sheet.pages.length; btn.disabled = true;
+  const fm = M.film(sheet.pages);
+  try {
+    const bytes = await buildPdf(i => { lb.textContent = `Saving ${i + 1}/${n}`; fm.step(i); }); fm.end(btn);
+    await saveFile(new Blob([bytes], { type: 'application/pdf' }), sheet.name.replace(/\.[^.]+$/, '') + '-laimue.pdf');
+    lb.textContent = 'Saved'; setTimeout(() => { if (lb.textContent === 'Saved') lb.textContent = 'Save PDF'; }, 1800);
+    if (!M.flash('', null, null, { at: btn })) doneToast('PDF saved'); if (!LS.get('support', false)) { LS.set('support', true); setTimeout(openSupport, 1800); } }
+  catch (e) { console.error(e); fm.end(); lb.textContent = 'Save PDF'; toast('Could not make the PDF: ' + e.message, 6000); }
   btn.disabled = false;
 }
 
 // ---------- tabs, wiring, start
 function showTab(t) {
-  LS.set('tab', t);
+  const dir = t === 'sheet' ? 1 : -1; LS.set('tab', t);
   for (const s of ['teach', 'sheet']) $('#' + s).hidden = s !== t;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   if (t !== 'teach') cancelAdv();
-  M.tab($('#' + t));
+  M.tab($('#' + t), dir);
   if (t === 'teach') requestAnimationFrame(() => { setMode(tmode); M.words($('#teachTitle')); });
   else if (sheet) sheet.pages.forEach(pg => { renderInk(pg); M.writeOn(pg.svg); });
-  else { M.frame($('.term')); M.prompt($('#promptTxt'), 'เปิดใบงาน แล้วเขียนคำตอบ…'); }
+  else { M.frame($('.term')); M.focus($('.term')); M.prompt($('#promptTxt'), 'เปิดใบงาน แล้วเขียนคำตอบ…'); }
+  if (t === 'sheet') M.type($('#sheetName'));
 }
 function wire() {
   document.querySelectorAll('.tab').forEach(b => (b.onclick = () => showTab(b.dataset.tab)));
@@ -674,11 +751,18 @@ function wire() {
   $('#playIntro').onclick = showIntro;
   const themes = ['auto', 'light', 'dark'], setTheme = t => { if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t; $('#themeName').textContent = t[0].toUpperCase() + t.slice(1); LS.set('theme', t); };
   setTheme(themes.includes(LS.get('theme')) ? LS.get('theme') : 'auto');
-  $('#themeBtn').onclick = e => { e.stopPropagation(); setTheme(themes[(themes.indexOf(LS.get('theme', 'auto')) + 1) % 3]); };
+  $('#themeBtn').onclick = e => { // the new theme opens as a circle from the ⋯ button where the browser can (CSS ::view-transition)
+    e.stopPropagation(); const t = themes[(themes.indexOf(LS.get('theme', 'auto')) + 1) % 3];
+    LS.set('theme', t); // now, so a quick second tap moves on from this one
+    if (document.startViewTransition && M.can()) document.startViewTransition(() => setTheme(t)).ready.catch(() => { }); else setTheme(t); // a tap mid-transition skips it (its ready rejects); the theme still applies
+  };
+  const sfxName = () => ($('#sfxName').textContent = S.on() ? 'On' : 'Off'); sfxName();
+  $('#sfxBtn').onclick = e => { e.stopPropagation(); S.set(!S.on()); sfxName(); };
+  clock();
   $('#loadHand').onclick = () => $('#loadHandFile').click();
   $('#loadHandFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadHandFile(f); };
   document.addEventListener('keydown', e => {
-    if ($('#teach').hidden || e.target.matches('textarea, input')) return;
+    if ($('#teach').hidden || !$('#ask').hidden || e.target.matches('textarea, input')) return;
     if (e.key === 'ArrowRight') go(cur + 1, 1); else if (e.key === 'ArrowLeft') go(cur - 1, -1);
   });
   addEventListener('resize', () => { if (!$('#teach').hidden) { cancelAdv(); renderTeach(); if (tmode === 'sentences' && spage) sizeSpad(); } });
@@ -745,8 +829,10 @@ async function runTests() { // open with ?test
 }
 
 const SUPPORT_URL = ''; // paste a Ko-fi / PromptPay link here; empty = popup has no support button
-function openSupport() { $('#supLink').hidden = !SUPPORT_URL; if (SUPPORT_URL) $('#supLink').href = SUPPORT_URL; $('#support').hidden = false; }
+function openSupport() { $('#supLink').hidden = !SUPPORT_URL; if (SUPPORT_URL) $('#supLink').href = SUPPORT_URL; $('#support').hidden = false; M.pop($('.sup-card')); }
 
+function unboot() { const b = $('#boot'); if (!b) return; b.classList.add('out'); setTimeout(() => b.remove(), 450); } // the ember splash fades once the app can be used
+setTimeout(unboot, 8000); // never stuck behind it
 (async function init() {
   buildTeach(); buildSent(); wire();
   try { const h = await db.get('hand'); if (h && h.g) hand = h; const s = await db.get('sents'); if (Array.isArray(s)) sents = s; } catch { toast('This browser blocks saving — use ⋯ → Save my handwriting file.', 6000); }
@@ -754,6 +840,7 @@ function openSupport() { $('#supLink').hidden = !SUPPORT_URL; if (SUPPORT_URL) $
   const refs = fetch('refs.json').then(r => r.json()).then(H.setRefs).catch(e => console.warn('reference hands', e)); // without them letters still vary, just less
   try { font = opentype.parse(await (await fetch('lib/Sriracha-Regular.ttf')).arrayBuffer()); } catch (e) { console.warn('fallback font', e); }
   await refs; lastDone = taught(); rebuildCut(); cutAll();
+  unboot();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (/[?&]test\b/.test(location.search)) return runTests();
   showTab(LS.get('tab', 'teach'));

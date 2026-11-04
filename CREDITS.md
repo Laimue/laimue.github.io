@@ -17,7 +17,8 @@ Only averages of groups of 15 or more samples are used. No single person's writi
 Rebuild: `python tools/crowd.py` then `node tools/fonts.js`.
 
 ## Sentences to copy (bank.json)
-- **Tatoeba** (CC BY 2.0 FR): Thai sentences from https://tatoeba.org, export https://downloads.tatoeba.org/exports/per_language/tha/tha_sentences.tsv.bz2 (filtered to Thai letters, wrapped into lines).
+- **Tatoeba** (CC BY 2.0 FR): Thai sentences from https://tatoeba.org, export https://downloads.tatoeba.org/exports/per_language/tha/tha_sentences.tsv.bz2 (native speakers' sentences only, none flagged or reviewed as wrong; filtered to Thai letters, wrapped into lines).
 - The traditional Thai alphabet poem (เป็นมนุษย์สุดประเสริฐเลิศคุณค่า …), public domain.
+- **Tatoeba** (CC BY 2.0 FR): English sentences (`bank-en.json`), export https://downloads.tatoeba.org/exports/per_language/eng/eng_sentences.tsv.bz2 (native speakers' sentences only, none flagged or reviewed as wrong; plain words, no names, no wider than a Thai page).
 
-Rebuild: unpack the export to `tools/cache/tatoeba/tha.tsv`, then `node tools/bank.js`.
+Rebuild: put the exports listed at the top of `tools/bank.js` in `tools/cache/tatoeba/`, then `node tools/bank.js` and `node tools/bank.js en`.
