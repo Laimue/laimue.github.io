@@ -338,7 +338,7 @@ const M = (() => {
     tl.fromTo(rule, { scaleX: 0 }, { scaleX: 1, duration: 0.9, ease: 'expo.inOut', onStart: () => { const b = rule.getBoundingClientRect(); spark.line(b.left, b.top, b.left + b.width, b.top, 0.9); } }, 0.1)
       .fromTo(q('.in-rule span'), { opacity: 0 }, { opacity: 1, duration: 0.4, stagger: 0.15 }, 0.5);
     steps.forEach((b, i) => tl.call(() => { gsap.set(b, { clearProps: 'opacity' }); type(b); }, null, 1.2 + i * 0.35));
-    tl.fromTo(q('.in-steps span'), { y: 10, opacity: 0 }, { ...on, duration: 0.45, stagger: 0.1, ease: 'power2.out' }, 1.5)
+    tl.fromTo(q('.in-steps li > span'), { y: 10, opacity: 0 }, { ...on, duration: 0.45, stagger: 0.1, ease: 'power2.out' }, 1.5)
       .fromTo(q('.in-start, .in-skip'), { y: 8, opacity: 0 }, { ...on, duration: 0.35, stagger: 0.06 }, 2.3)
       .call(() => trace(ov.querySelector('.in-start'), 0.6), null, 2.7);
   }
