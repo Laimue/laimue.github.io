@@ -11,7 +11,7 @@ function toast(msg, ms = 3500) { const t = $('#toast'); t.textContent = msg; t.h
 // in-app confirm (replaces the browser's confirm()): resolves true / false. danger = the safe button (Cancel) has focus.
 function ask(title, msg, { ok = 'OK', no = 'Cancel', danger = false } = {}) {
   const d = $('#ask'), y = $('#askOk'), n = $('#askNo'), back = document.activeElement, t = $('#askT');
-  t.textContent = title; delete t.dataset.split; $('#askM').textContent = msg; y.textContent = ok; n.textContent = no; y.classList.toggle('danger', danger);
+  t.textContent = title; $('#askM').textContent = msg; y.textContent = ok; n.textContent = no; y.classList.toggle('danger', danger);
   d.hidden = false; M.pop(d.firstElementChild, t); (danger ? n : y).focus();
   return new Promise(res => {
     const done = v => { d.hidden = true; d.onkeydown = d.onclick = y.onclick = n.onclick = null; if (back && back.focus) back.focus({ preventScroll: true }); res(v); };
@@ -33,9 +33,10 @@ const db = (() => {
   }));
   const tx = (mode, fn) => open().then(d => new Promise((res, rej) => {
     const t = d.transaction('kv', mode), q = fn(t.objectStore('kv'));
-    t.oncomplete = () => res(q.result); t.onerror = () => rej(t.error);
+    if (mode === 'readwrite' && t.commit) t.commit(); // don't wait for the page to stay alive: an unfinished write is dropped when it closes
+    t.oncomplete = () => res(mode === 'readonly' ? q.result : undefined); t.onerror = t.onabort = () => rej(t.error); // storage full aborts without an error event
   }));
-  return { get: k => tx('readonly', s => s.get(k)), set: (k, v) => tx('readwrite', s => s.put(v, k)) };
+  return { get: k => tx('readonly', s => s.get(k)), set: (k, v) => tx('readwrite', s => s.put(v, k)), del: k => tx('readwrite', s => s.delete(k)) };
 })();
 
 let hand = { v: 1, g: {} }, font = null, saveT, handGen = 0; // handGen: bumped whenever the letters change, so cached handwriting is redone
@@ -385,7 +386,7 @@ const langBtns = () => document.querySelectorAll('#sentLang button').forEach(b =
 const TITLES = { letters: 'Teach your <em>hand.</em>', sentences: 'Copy one <em>line.</em>' };
 function setMode(m, anim) {
   tmode = m === 'sentences' ? m : 'letters'; LS.set('tmode', tmode);
-  const tt = $('#teachTitle'); if (tt.dataset.m !== tmode) { tt.innerHTML = TITLES[tmode]; tt.dataset.m = tmode; delete tt.dataset.split; }
+  const tt = $('#teachTitle'); if (tt.dataset.m !== tmode) { tt.innerHTML = TITLES[tmode]; tt.dataset.m = tmode; }
   $('#lettersPane').hidden = $('#lettersHud').hidden = tmode !== 'letters'; $('#sentPane').hidden = $('#sentLang').hidden = $('#sentFig').hidden = tmode === 'letters';
   document.querySelectorAll('#teachMode button').forEach(b => { b.classList.toggle('on', b.dataset.m === tmode); b.setAttribute('aria-selected', b.dataset.m === tmode); });
   if (tmode === 'letters') { renderTeach(); M.frame($('#padWrap')); } else { cancelAdv(); langBtns(); renderSentList(); renderSent(); M.frame($('#spadWrap')); }
@@ -447,22 +448,59 @@ const stkPaths = (r, color) => { const w = new Map(r.pens.flatMap(([lw, s]) => s
   return r.strokes.map(a => `<path class="stk" d="${pathD([a])}" fill="none" stroke="${color}" stroke-width="${w.get(a).toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join(''); };
 // pen strokes, one path per pen pressure (line width)
 const penPaths = (r, color) => r.pens.map(([w, s]) => `<path d="${pathD(s)}" fill="none" stroke="${color}" stroke-width="${w.toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join('');
+// the one open worksheet survives refresh and closing: the file is written once, the boxes as they change (two keys, so typing never rewrites a big PDF)
+const NOSAVE = /[?&]test\b/.test(location.search); // ?test never touches the saved sheet
+let boxT = 0;
+const saveWarn = s => { if (!s.warned) { s.warned = true; toast("This worksheet can't be kept on this device (too big, or storage is full). It works now, but it won't come back after you close the app. Use Save PDF before closing.", 9000); } };
+const writeBoxes = () => {
+  clearTimeout(boxT); boxT = 0; const s = sheet; if (!s || s.noSave) return;
+  db.set('sheetBoxes', s.pages.map(pg => pg.boxes.filter(b => b.text.trim()).map(({ x, y, w, u, gap, neat, seed, text, mods }) => ({ x, y, w, u, gap, neat, seed, text, mods })))).catch(() => saveWarn(s));
+};
+const saveBoxes = () => { if (NOSAVE || !sheet || sheet.noSave) return; clearTimeout(boxT); boxT = setTimeout(writeBoxes, 300); };
+const dropSaved = () => { clearTimeout(boxT); boxT = 0; for (const k of ['sheetBoxes', 'sheetFile']) db.del(k).catch(() => { }); };
+function saveSheetFile(s) { // the old sheet goes first: if this file doesn't fit, a refresh must not bring back the replaced one
+  if (NOSAVE) return; dropSaved();
+  db.set('sheetFile', s.kind === 'pdf' ? { name: s.name, kind: s.kind, bytes: s.bytes } : { name: s.name, kind: s.kind, jpg: s.jpg })
+    .catch(() => { s.noSave = true; if (s === sheet) { dropSaved(); saveWarn(s); } });
+}
+function closeSheet() {
+  select(null); clearSel(); sheet = null; $('#pages').innerHTML = ''; $('#exportBtn').disabled = true; $('#closeBtn').hidden = true;
+  $('#empty').hidden = false; $('#sheetName').textContent = 'Worksheet'; if (!NOSAVE) dropSaved();
+}
+async function restoreSheet() {
+  let f, list;
+  try { f = await db.get('sheetFile'); list = await db.get('sheetBoxes') || []; } catch { return; } // storage blocked: init has already said so
+  if (!f) return;
+  try {
+    if (f.kind === 'pdf') await openPdf(f.name, f.bytes, true);
+    else { const img = await createImageBitmap(new Blob([f.jpg], { type: 'image/jpeg' })); setSheet({ name: f.name, kind: 'img', jpg: f.jpg, img, pages: [{ w: 595, h: 595 * img.height / img.width, boxes: [] }] }, true); }
+    if (!Array.isArray(list) || list.length > sheet.pages.length) throw new Error('saved boxes do not fit the file');
+    sheet.pages.forEach((pg, i) => {
+      for (const b of list[i] || []) {
+        if (![b.x, b.y, b.w, b.u, b.gap, b.seed].every(Number.isFinite) || typeof b.text !== 'string') throw new Error('bad saved box');
+        pg.boxes.push(b); addBoxEl(pg, b);
+      }
+      renderInk(pg);
+    });
+  } catch (e) { console.error(e); closeSheet(); toast('Your saved worksheet could not be opened, so it was removed. Please open the file again.', 6000); }
+}
 const toPage = (pg, e) => { const r = pg.el.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * pg.w, (e.clientY - r.top) / r.height * pg.h]; };
 
 async function openFile(file) {
+  if (sheet && !(await ask('Replace this worksheet?', 'The one open now and your answers on it are removed from this device. Use Save PDF first to keep them.', { ok: 'Replace', danger: true }))) return;
   try {
     if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name)) await openPdf(file.name, await file.arrayBuffer());
     else await openImage(file);
   } catch (e) { console.error(e); toast('Could not open that file: ' + e.message, 6000); }
 }
-async function openPdf(name, buf) {
+async function openPdf(name, buf, quiet) {
   const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise; // pdf.js takes ownership of its copy
   const pages = [];
   for (let n = 1; n <= pdf.numPages; n++) {
     const p = await pdf.getPage(n), vp = p.getViewport({ scale: 1 });
     pages.push({ w: vp.width, h: vp.height, vp, pdfPage: p, boxes: [] });
   }
-  setSheet({ name, kind: 'pdf', bytes: buf, pages });
+  setSheet({ name, kind: 'pdf', bytes: buf, pages }, quiet);
 }
 async function openImage(file) {
   const bmp = await createImageBitmap(file), s = Math.min(1, 2400 / Math.max(bmp.width, bmp.height));
@@ -471,8 +509,8 @@ async function openImage(file) {
   const jpg = new Uint8Array(await (await new Promise(r => cv.toBlob(r, 'image/jpeg', 0.92))).arrayBuffer());
   setSheet({ name: file.name, kind: 'img', jpg, img: cv, pages: [{ w: 595, h: 595 * cv.height / cv.width, boxes: [] }] });
 }
-function setSheet(s) {
-  select(null); clearSel(); sheet = s; $('#pages').innerHTML = ''; $('#exportBtn').disabled = false;
+function setSheet(s, quiet) {
+  select(null); clearSel(); sheet = s; $('#pages').innerHTML = ''; $('#exportBtn').disabled = false; $('#closeBtn').hidden = false;
   $('#empty').hidden = true; $('#sheetName').textContent = s.name.replace(/\.[^.]+$/, '');
   for (const pg of s.pages) {
     const el = document.createElement('div'); el.className = 'page'; el.style.aspectRatio = pg.w + ' / ' + pg.h; el.style.maxWidth = '1000px';
@@ -485,11 +523,12 @@ function setSheet(s) {
   let chain = Promise.resolve(); // pages are drawn one after another; each page's scan starts when its own drawing is done
   const ready = s.pages.map(pg => (chain = chain.then(() => renderBg(pg))));
   chain.catch(e => toast('Page drawing failed: ' + e.message));
-  M.pageIn(s.pages, ready);
+  if (quiet) ready.forEach(r => r.catch(() => { })); else { saveSheetFile(s); M.pageIn(s.pages, ready); }
 }
 async function renderBg(pg) {
+  if (!pg.el.isConnected) return; // the sheet was closed or replaced while its pages were still drawing
   const dpr = Math.min(devicePixelRatio || 1, 2);
-  let sc = Math.max(1, (pg.el.clientWidth || 800) * dpr / pg.w);
+  let sc = Math.max(1, (pg.el.clientWidth || 1000) * dpr / pg.w);
   if (pg.w * pg.h * sc * sc > 6e6) sc = Math.sqrt(6e6 / (pg.w * pg.h)); // keep iPad memory sane
   const x = pg.bg.getContext('2d');
   if (sheet.kind === 'pdf') {
@@ -549,6 +588,7 @@ function renderInk(pg) {
   pg.boxes.forEach((b, i) => { b.g = pg.svg.children[i]; if (ed && ed.box === b) b.g.style.visibility = 'hidden'; }); // its handwriting hides while the text is open
   if (lsel && lsel.pg === pg) showSel();
   if (sel && sel.pg === pg) placeBar();
+  saveBoxes();
 }
 function removeBox(s) { s.pg.boxes = s.pg.boxes.filter(b => b !== s.box); s.box.el.remove(); renderInk(s.pg); }
 function select(s, focus) {
@@ -731,14 +771,14 @@ async function exportPdf() {
 }
 
 // ---------- tabs, wiring, start
-function showTab(t) {
+function showTab(t, quiet) {
   const dir = t === 'sheet' ? 1 : -1; LS.set('tab', t);
   for (const s of ['teach', 'sheet']) $('#' + s).hidden = s !== t;
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   if (t !== 'teach') cancelAdv();
   M.tab($('#' + t), dir);
   if (t === 'teach') requestAnimationFrame(() => { setMode(tmode); M.words($('#teachTitle')); });
-  else if (sheet) sheet.pages.forEach(pg => { renderInk(pg); M.writeOn(pg.svg); });
+  else if (sheet) sheet.pages.forEach(pg => { renderInk(pg); if (!quiet) M.writeOn(pg.svg); });
   else { M.frame($('.term')); M.focus($('.term')); M.prompt($('#promptTxt'), 'เปิดใบงาน แล้วเขียนคำตอบ…'); }
   if (t === 'sheet') M.type($('#sheetName'));
 }
@@ -775,6 +815,9 @@ function wire() {
   document.addEventListener('touchmove', e => { if ([...e.touches].some(t => t.touchType === 'stylus') && e.target.closest('#pad, #spad, .page.lasso')) e.preventDefault(); }, { passive: false });
   $('#openFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openFile(f); };
   $('#exportBtn').onclick = exportPdf;
+  $('#closeBtn').onclick = async () => { if (await ask('Close this worksheet?', 'It and your answers are removed from this device. Use Save PDF first to keep them.', { ok: 'Close', no: 'Keep', danger: true })) { closeSheet(); showTab('sheet'); } };
+  document.addEventListener('visibilitychange', () => { if (document.hidden && boxT) writeBoxes(); }); // phones kill hidden pages without warning
+  addEventListener('pagehide', () => { if (boxT) writeBoxes(); });
   const inkBtns = document.querySelectorAll('.ink');
   const markInk = () => inkBtns.forEach(b => b.classList.toggle('on', b.dataset.c === ink.color));
   inkBtns.forEach(b => (b.onclick = () => { ink.color = b.dataset.c; LS.set('color', ink.color); markInk(); if (sheet) sheet.pages.forEach(renderInk); }));
@@ -784,7 +827,7 @@ function wire() {
   const t = $('#txt');
   t.oninput = () => { // Enter and pasted line breaks start new lines
     if (!ed) return;
-    ed.box.text = t.value; ed.box.mods = null; fitEd(); // shortcut: lasso edits are keyed by letter index, so typing drops them
+    ed.box.text = t.value; ed.box.mods = null; saveBoxes(); fitEd(); // shortcut: lasso edits are keyed by letter index, so typing drops them
   };
   t.onkeydown = e => { if (e.key === 'Escape') { e.preventDefault(); select(null); } }; // finish = Esc, tap outside or hide the keyboard
   t.onblur = () => { if (ed && Date.now() - barT > 400) closeEd(); }; // keyboard closed: write it, keep the box selected
@@ -840,10 +883,11 @@ setTimeout(unboot, 8000); // never stuck behind it
   const refs = fetch('refs.json').then(r => r.json()).then(H.setRefs).catch(e => console.warn('reference hands', e)); // without them letters still vary, just less
   try { font = opentype.parse(await (await fetch('lib/Sriracha-Regular.ttf')).arrayBuffer()); } catch (e) { console.warn('fallback font', e); }
   await refs; lastDone = taught(); rebuildCut(); cutAll();
+  if (!NOSAVE) await restoreSheet();
   unboot();
   if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => { });
   if (/[?&]test\b/.test(location.search)) return runTests();
-  showTab(LS.get('tab', 'teach'));
+  showTab(LS.get('tab', 'teach'), true);
   if (!LS.get('intro', false)) showIntro();
 })();
 function showIntro() { // the app name written in the person's own hand (typed font for letters not taught yet)

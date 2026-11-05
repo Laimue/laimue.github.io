@@ -101,7 +101,8 @@ const M = (() => {
   }
   function type(el, delay = 0) {
     if (!el) return null;
-    if (!el.dataset.split) { el.setAttribute('aria-label', el.textContent.trim()); split(el); el.dataset.split = 1; }
+    if (!el.querySelector('.c')) { // first time, or the text was replaced since
+      el.setAttribute('aria-label', el.textContent.trim()); split(el); }
     if (!can()) return null;
     const ws = [...el.querySelectorAll('.w')], cs = [...el.querySelectorAll('.c')];
     if (el._ty) el._ty.kill(); if (el._sp) el._sp();

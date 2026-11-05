@@ -1,5 +1,5 @@
 // Network first (so updates show up), cache as offline fallback.
-const C = 'laimue-v28'; // bump with VERSION in hand.js
+const C = 'laimue-v29'; // bump with VERSION in hand.js
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'hand.js', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon.svg', 'sfx.js',
   'lib/opentype.min.js', 'lib/pdf.min.js', 'lib/pdf.worker.min.js', 'lib/pdf-lib.min.js', 'lib/Sriracha-Regular.ttf', 'refs.json', 'bank.json', 'bank-en.json',
   'motion.js', 'lib/gsap.min.js', 'lib/lottie_light.min.js', 'anim/done.json', 'lib/fonts/kanit-700-thai.woff2', 'lib/fonts/kanit-700-latin.woff2', 'lib/fonts/kanit-800-thai.woff2', 'lib/fonts/kanit-800-latin.woff2'];
