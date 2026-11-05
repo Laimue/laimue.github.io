@@ -422,13 +422,16 @@ let sheet = null, sel = null, down = null;
 const ink = { color: LS.get('color', '#1a1a1a'), thick: LS.get('thick', 1) };
 // v19: handwriting cached per box; only new text, size, look or letters lay it out again (slow on long text), a move just shifts the ink
 const layKey = b => [b.text, b.w, b.u, b.gap, b.seed, b.neat ?? 1, ink.thick, JSON.stringify(b.mods || null), handGen].join('\u0001');
+const inkOf = r => { // what was written (a wide formula can pass the box edge)
+  const e = r.ink = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const a of [...r.strokes, ...r.fills]) for (let i = 0; i < a.length; i += 2) { e[0] = Math.min(e[0], a[i]); e[2] = Math.max(e[2], a[i]); e[1] = Math.min(e[1], a[i + 1]); e[3] = Math.max(e[3], a[i + 1]); }
+};
 const lay = b => {
   const key = layKey(b);
   let c = b.lc;
   if (!c || c.key !== key) {
-    const r = H.layout(b.text, use(), { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods });
-    const e = r.ink = [Infinity, Infinity, -Infinity, -Infinity]; // what was written (a wide formula can pass the box edge)
-    for (const a of [...r.strokes, ...r.fills]) for (let i = 0; i < a.length; i += 2) { e[0] = Math.min(e[0], a[i]); e[2] = Math.max(e[2], a[i]); e[1] = Math.min(e[1], a[i + 1]); e[3] = Math.max(e[3], a[i + 1]); }
+    const t0 = performance.now(), r = H.layout(b.text, use(), { x: b.x, y: b.y, width: b.w, u: b.u, gap: b.gap, seed: b.seed, fb, thick: ink.thick, neat: b.neat ?? 1, mods: b.mods });
+    b.lms = performance.now() - t0; inkOf(r);
     c = b.lc = { key, x: b.x, y: b.y, r };
   } else if (c.x !== b.x || c.y !== b.y) { // pens hold the same arrays as strokes, so each point moves once
     const dx = b.x - c.x, dy = b.y - c.y;
@@ -438,14 +441,14 @@ const lay = b => {
   }
   return c.r;
 };
-const pathD = (arrs, close) => arrs.map(a => {
-  let s = 'M' + a[0].toFixed(2) + ' ' + a[1].toFixed(2) + (a.length === 2 ? 'l0.01 0' : '');
-  for (let i = 2; i < a.length; i += 2) s += 'L' + a[i].toFixed(2) + ' ' + a[i + 1].toFixed(2);
+const pathD = (arrs, close, ox = 0, oy = 0) => arrs.map(a => {
+  let s = 'M' + (a[0] - ox).toFixed(2) + ' ' + (a[1] - oy).toFixed(2) + (a.length === 2 ? 'l0.01 0' : '');
+  for (let i = 2; i < a.length; i += 2) s += 'L' + (a[i] - ox).toFixed(2) + ' ' + (a[i + 1] - oy).toFixed(2);
   return close ? s + 'Z' : s;
 }).join('');
 // one path per stroke in writing order (r.strokes is letter by letter, the pens hold the same arrays), so the ink can write itself on screen
-const stkPaths = (r, color) => { const w = new Map(r.pens.flatMap(([lw, s]) => s.map(a => [a, lw])));
-  return r.strokes.map(a => `<path class="stk" d="${pathD([a])}" fill="none" stroke="${color}" stroke-width="${w.get(a).toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join(''); };
+const stkPaths = (r, color, ox, oy) => { const w = new Map(r.pens.flatMap(([lw, s]) => s.map(a => [a, lw])));
+  return r.strokes.map(a => `<path class="stk" d="${pathD([a], false, ox, oy)}" fill="none" stroke="${color}" stroke-width="${w.get(a).toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join(''); };
 // pen strokes, one path per pen pressure (line width)
 const penPaths = (r, color) => r.pens.map(([w, s]) => `<path d="${pathD(s)}" fill="none" stroke="${color}" stroke-width="${w.toFixed(3)}" stroke-linecap="round" stroke-linejoin="round"/>`).join('');
 // the one open worksheet survives refresh and closing: the file is written once, the boxes as they change (two keys, so typing never rewrites a big PDF)
@@ -456,7 +459,7 @@ const writeBoxes = () => {
   clearTimeout(boxT); boxT = 0; const s = sheet; if (!s || s.noSave) return;
   db.set('sheetBoxes', s.pages.map(pg => pg.boxes.filter(b => b.text.trim()).map(({ x, y, w, u, gap, neat, seed, text, mods }) => ({ x, y, w, u, gap, neat, seed, text, mods })))).catch(() => saveWarn(s));
 };
-const saveBoxes = () => { if (NOSAVE || !sheet || sheet.noSave) return; clearTimeout(boxT); boxT = setTimeout(writeBoxes, 300); };
+const saveBoxes = () => { if (NOSAVE || !sheet || sheet.noSave || gest) return; clearTimeout(boxT); boxT = setTimeout(writeBoxes, 300); };
 const dropSaved = () => { clearTimeout(boxT); boxT = 0; for (const k of ['sheetBoxes', 'sheetFile']) db.del(k).catch(() => { }); };
 function saveSheetFile(s) { // the old sheet goes first: if this file doesn't fit, a refresh must not bring back the replaced one
   if (NOSAVE) return; dropSaved();
@@ -484,7 +487,7 @@ async function restoreSheet() {
     });
   } catch (e) { console.error(e); closeSheet(); toast('Your saved worksheet could not be opened, so it was removed. Please open the file again.', 6000); }
 }
-const toPage = (pg, e) => { const r = pg.el.getBoundingClientRect(); return [(e.clientX - r.left) / r.width * pg.w, (e.clientY - r.top) / r.height * pg.h]; };
+const toPage = (pg, e, r = pg.el.getBoundingClientRect()) => [(e.clientX - r.left) / r.width * pg.w, (e.clientY - r.top) / r.height * pg.h];
 
 async function openFile(file) {
   if (sheet && !(await ask('Replace this worksheet?', 'The one open now and your answers on it are removed from this device. Use Save PDF first to keep them.', { ok: 'Replace', danger: true }))) return;
@@ -553,44 +556,73 @@ function addBoxEl(pg, box) {
   const el = document.createElement('div'); el.className = 'tbox'; el.innerHTML = '<div class="grip"></div>';
   box.el = el; pg.el.append(el);
   let drag = null;
+  const gripW = d => Math.max(30, d.bw + d.dx);
+  const gripFrame = d => { // the frame follows the finger; the writing reflows now if that's quick, else once the finger pauses
+    const open = ed && ed.box === box;
+    d.over ??= open ? 0 : Math.max(0, box.r.ink[2] + box.u * 0.25 - box.x - d.bw); // ink past the box edge: the frame starts out there, and must not jump in
+    const follow = () => { const x0 = open ? box.x : Math.min(box.x, box.r.ink[0] - box.u * 0.25); el.style.width = 100 * (box.x + gripW(d) + d.over - x0) / pg.w + '%'; };
+    if (box.lms < 12) { box.w = gripW(d); renderInk(pg); }
+    else { clearTimeout(d.t); d.t = setTimeout(() => { if (drag === d) slowThen(box, () => { box.w = gripW(d); renderInk(pg); if (drag === d) follow(); }); }, 150); }
+    follow();
+  };
   el.addEventListener('pointerdown', e => {
     e.stopPropagation(); if (e.target.id === 'txt') return; // taps inside the open text move the caret
     e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
-    const [x, y] = toPage(pg, e);
-    drag = { id: e.pointerId, x, y, bx: box.x, by: box.y, bw: box.w, grip: e.target.classList.contains('grip'), moved: false, cx: e.clientX, cy: e.clientY };
+    drag = { id: e.pointerId, k: pg.el.getBoundingClientRect().width / pg.w, bw: box.w, grip: e.target.classList.contains('grip'), moved: false, cx: e.clientX, cy: e.clientY, dx: 0, dy: 0, raf: 0, t: 0, mv: null };
   });
   el.addEventListener('pointermove', e => {
     if (!drag || drag.id !== e.pointerId) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) < 6) return;
-    drag.moved = true; const [x, y] = toPage(pg, e);
-    if (drag.grip) box.w = Math.max(30, drag.bw + x - drag.x); else { box.x = drag.bx + x - drag.x; box.y = drag.by + y - drag.y; }
-    renderInk(pg);
+    const d = drag;
+    if (!d.moved) { d.moved = true; gestOn(); if (!d.grip) { M.unwrite(box.g); d.mv = lift(pg, [box.g.cloneNode(true)]); box.g.style.visibility = 'hidden'; el.classList.add('moving'); } }
+    d.dx = (e.clientX - d.cx) / d.k; d.dy = (e.clientY - d.cy) / d.k;
+    if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; if (d.grip) gripFrame(d); else el.style.transform = d.mv.style.transform = `translate(${d.dx * d.k}px, ${d.dy * d.k}px)`; });
   });
   const up = e => {
     if (!drag || drag.id !== e.pointerId) return;
-    const d = drag; drag = null;
+    const d = drag; drag = null; cancelAnimationFrame(d.raf); clearTimeout(d.t);
+    if (d.moved) {
+      gestOff();
+      if (d.grip) { box.w = gripW(d); slowThen(box, () => renderInk(pg)); }
+      else { box.x += d.dx; box.y += d.dy; d.mv.remove(); el.classList.remove('moving'); el.style.transform = ''; renderInk(pg); }
+    }
     if (!sel || sel.box !== box) select({ pg, box }, !d.moved); else if (!d.moved) openEd(); else placeBar();
   };
   el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
 }
+// one <g> per box, placed at the box: its paths are rewritten only when its ink changed, and moving a box only changes the group's position
+function drawBox(pg, b) {
+  const r = b.r = lay(b), key = b.lc.key + ink.color; b.h = Math.max(r.height, b.u * 2.6);
+  if (!b.g) b.g = pg.svg.appendChild(document.createElementNS(NS, 'g'));
+  if (b.gk !== key) { b.gk = key; b.g.innerHTML = stkPaths(r, ink.color, b.x, b.y) + (r.fills.length ? `<path class="fil" d="${pathD(r.fills, true, b.x, b.y)}" fill="${ink.color}"/>` : ''); }
+  b.g.setAttribute('transform', `translate(${b.x} ${b.y})`);
+  // the box frames what was written: it grows past its width/top when a formula reaches out (empty ink = Infinity, so min/max keep the box)
+  const s = b.el.style, open = ed && ed.box === b, p = b.u * 0.25, e = r.ink;
+  b.g.style.visibility = open ? 'hidden' : ''; // its handwriting hides while the text is open
+  const x0 = open ? b.x : Math.min(b.x, e[0] - p), y0 = open ? b.y : Math.min(b.y, e[1] - p), x1 = open ? b.x + b.w : Math.max(b.x + b.w, e[2] + p), y1 = Math.max(b.y + b.h, e[3] + p);
+  s.left = 100 * x0 / pg.w + '%'; s.top = 100 * y0 / pg.h + '%'; s.width = 100 * (x1 - x0) / pg.w + '%'; s.height = open ? 'auto' : 100 * (y1 - y0) / pg.h + '%';
+}
 function renderInk(pg) {
-  let html = '';
-  for (const b of pg.boxes) {
-    const r = b.r = lay(b); b.h = Math.max(r.height, b.u * 2.6);
-    html += '<g>' + stkPaths(r, ink.color);
-    html += (r.fills.length ? `<path class="fil" d="${pathD(r.fills, true)}" fill="${ink.color}"/>` : '') + '</g>';
-    // the box frames what was written: it grows past its width/top when a formula reaches out (empty ink = Infinity, so min/max keep the box)
-    const s = b.el.style, open = ed && ed.box === b, p = b.u * 0.25, e = r.ink;
-    const x0 = open ? b.x : Math.min(b.x, e[0] - p), y0 = open ? b.y : Math.min(b.y, e[1] - p), x1 = open ? b.x + b.w : Math.max(b.x + b.w, e[2] + p), y1 = Math.max(b.y + b.h, e[3] + p);
-    s.left = 100 * x0 / pg.w + '%'; s.top = 100 * y0 / pg.h + '%'; s.width = 100 * (x1 - x0) / pg.w + '%'; s.height = open ? 'auto' : 100 * (y1 - y0) / pg.h + '%';
-  }
-  pg.svg.innerHTML = html;
-  pg.boxes.forEach((b, i) => { b.g = pg.svg.children[i]; if (ed && ed.box === b) b.g.style.visibility = 'hidden'; }); // its handwriting hides while the text is open
+  for (const b of pg.boxes) drawBox(pg, b);
   if (lsel && lsel.pg === pg) showSel();
   if (sel && sel.pg === pg) placeBar();
   saveBoxes();
 }
-function removeBox(s) { s.pg.boxes = s.pg.boxes.filter(b => b !== s.box); s.box.el.remove(); renderInk(s.pg); }
+// ---------- during a gesture only a picture moves: a copy of the moving ink in its own layer (no repaint of the page, no engine, no saving); the real change is written once, on release
+let gest = false, calmT = 0;
+const setCalm = on => document.body.classList.toggle('calm', on); // decoration rests while something moves
+const gestOn = () => { gest = true; clearTimeout(calmT); clearTimeout(boxT); setCalm(true); $('#panel').hidden = true; }; // a save still waiting joins the one at release
+const gestOff = () => { gest = false; setCalm(false); };
+function lift(pg, nodes) {
+  const mv = document.createElementNS(NS, 'svg'); mv.setAttribute('class', 'mv'); mv.setAttribute('viewBox', `0 0 ${pg.w} ${pg.h}`); mv.setAttribute('preserveAspectRatio', 'none');
+  mv.append(...nodes); pg.ov.after(mv); return mv;
+}
+// long text takes a moment to write: show "writing…" first (two frames so it paints) instead of a frozen screen
+const slowThen = (box, fn) => {
+  if (!(box.text.length > 120 && !(box.lc && box.lc.key === layKey(box)))) return fn();
+  box.el.classList.add('busy'); requestAnimationFrame(() => requestAnimationFrame(() => { box.el.classList.remove('busy'); fn(); }));
+};
+function removeBox(s) { s.pg.boxes = s.pg.boxes.filter(b => b !== s.box); s.box.el.remove(); if (s.box.g) s.box.g.remove(); renderInk(s.pg); }
 function select(s, focus) {
   if (sel) { closeEd(); sel.box.el.classList.remove('on'); if ((!s || s.box !== sel.box) && !sel.box.text.trim()) removeBox(sel); }
   sel = s;
@@ -603,17 +635,16 @@ let ed = null, barT = 0; // ed = the {pg, box} whose text is open; barT = last t
 function openEd() {
   if (!sel) return;
   const t = $('#txt'), { box } = sel;
-  if (ed !== sel) { closeEd(); ed = sel; box.el.classList.add('edit'); box.el.append(t); t.hidden = false; t.value = box.text; renderInk(sel.pg); }
+  if (ed !== sel) { closeEd(); ed = sel; M.unwrite(box.g); box.el.classList.add('edit'); box.el.append(t); t.hidden = false; t.value = box.text; renderInk(sel.pg); }
   fitEd(); t.focus({ preventScroll: true }); t.setSelectionRange(t.value.length, t.value.length); keepVisible();
 }
 function closeEd() {
   if (!ed) return;
   const { pg, box } = ed, t = $('#txt'); ed = null;
   box.el.classList.remove('edit');
-  const has = !!box.text.trim(), done = () => { box.el.classList.remove('busy'); renderInk(pg); if (has && box.g) M.writeOn(box.g, 1.5); };
+  const has = !!box.text.trim(), done = () => { renderInk(pg); if (has && box.g) M.writeOn(box.g, 1.5); };
   if (has) M.handover(box.el, t);
-  // long text takes a moment to write: show "writing…" first (two frames so it paints) instead of a frozen screen
-  if (box.text.length > 120 && !(box.lc && box.lc.key === layKey(box))) { box.el.classList.add('busy'); requestAnimationFrame(() => requestAnimationFrame(done)); } else done();
+  slowThen(box, done);
   t.hidden = true; document.body.append(t); t.blur();
 }
 function fitEd() { // typed text at the box's handwriting size, on screen pixels
@@ -624,7 +655,7 @@ function fitEd() { // typed text at the box's handwriting size, on screen pixels
   placeBar();
 }
 function placeBar() { // above the box like the lasso menu; under it when there is no room above
-  if (!sel) return;
+  if (!sel || gest) return;
   const p = $('#panel'), el = sel.box.el, W = sel.pg.el.clientWidth;
   if (p.parentNode !== sel.pg.el) sel.pg.el.append(p); // moving it would replay its fade-in on every redraw
   p.hidden = false;
@@ -656,10 +687,11 @@ function selBox() {
   for (const it of lsel.items) { const c = cbOf(it); if (!c) continue; B[0] = Math.min(B[0], c[0]); B[1] = Math.min(B[1], c[1]); B[2] = Math.max(B[2], c[2]); B[3] = Math.max(B[3], c[3]); }
   return B;
 }
+const placeSel = (x0, y0, x1, y1, pad = 3) => { const { w, h } = lsel.pg, s = lsel.el.style; s.left = 100 * (x0 - pad) / w + '%'; s.top = 100 * (y0 - pad) / h + '%'; s.width = 100 * (x1 - x0 + 2 * pad) / w + '%'; s.height = 100 * (y1 - y0 + 2 * pad) / h + '%'; };
 function showSel() {
   const { pg } = lsel, [x0, y0, x1, y1] = selBox(), pad = 3, menu = $('#lassoMenu');
   if (!lsel.el) { lsel.el = document.createElement('div'); lsel.el.className = 'lsel'; lsel.el.innerHTML = ['nw', 'ne', 'sw', 'se'].map(h => `<span class="h ${h}" data-h="${h}"></span>`).join(''); pg.el.append(lsel.el); }
-  const s = lsel.el.style; s.left = 100 * (x0 - pad) / pg.w + '%'; s.top = 100 * (y0 - pad) / pg.h + '%'; s.width = 100 * (x1 - x0 + 2 * pad) / pg.w + '%'; s.height = 100 * (y1 - y0 + 2 * pad) / pg.h + '%';
+  placeSel(x0, y0, x1, y1);
   if (lsel.busy) return;
   pg.el.append(menu); menu.hidden = false;
   const below = y0 - pad < 0.08 * pg.h; // no room above: show the menu under the selection
@@ -685,10 +717,57 @@ function lassoAct(a) {
   }
   renderInk(lsel.pg);
 }
+// copies of the chosen letters go up to the moving layer, the real ones hide until release
+function liftSel(g) {
+  gestOn(); const { pg, items } = lsel, groups = new Map();
+  for (const { b, ci } of items) {
+    let c = groups.get(b);
+    if (!c) { M.unwrite(b.g); const e = document.createElementNS(NS, 'g'); e.setAttribute('transform', b.g.getAttribute('transform')); groups.set(b, c = { e, fills: [] }); }
+    const [s0, s1, f0, f1] = b.r.sr[ci];
+    for (let i = s0; i < s1; i++) { const q = b.g.children[i]; c.e.append(q.cloneNode()); q.style.visibility = 'hidden'; }
+    c.fills.push(...b.r.fills.slice(f0, f1));
+  }
+  for (const [b, { e, fills }] of groups) if (fills.length) { // font letters share one path: split it for the gesture
+    const fil = b.g.querySelector('.fil'), mine = new Set(fills), o = fil.cloneNode();
+    o.setAttribute('d', pathD(fills, true, b.x, b.y)); e.append(o); fil.setAttribute('d', pathD(b.r.fills.filter(a => !mine.has(a)), true, b.x, b.y));
+  }
+  lsel.el.classList.add('moving'); g.mv = lift(pg, [...groups.values()].map(c => c.e));
+}
+function selFrame(g) {
+  const k = g.rc.width / lsel.pg.w;
+  if (g.kind === 'move') { g.mv.style.transform = lsel.el.style.transform = `translate(${g.dx * k}px, ${g.dy * k}px)`; return; }
+  const [ax, ay] = g.anchor, f = g.f, [x0, y0, x1, y1] = g.B, X = v => ax + (v - ax) * f, Y = v => ay + (v - ay) * f;
+  g.mv.style.transform = `translate(${ax * k}px, ${ay * k}px) scale(${f}) translate(${-ax * k}px, ${-ay * k}px)`;
+  placeSel(Math.min(X(x0), X(x1)), Math.min(Y(y0), Y(y1)), Math.max(X(x0), X(x1)), Math.max(Y(y0), Y(y1)));
+}
+// release: the same move and scale the engine applies last (layout: mods), done directly on the held letters, so no new layout (ui30 proves it matches a fresh one)
+const moveCluster = (r, ci, cx, cy, nx, ny, f) => {
+  const [s0, s1, f0, f1] = r.sr[ci], mv = a => { for (let j = 0; j < a.length; j += 2) { a[j] = nx + (a[j] - cx) * f; a[j + 1] = ny + (a[j + 1] - cy) * f; } };
+  for (let i = s0; i < s1; i++) mv(r.strokes[i]);
+  for (let i = f0; i < f1; i++) mv(r.fills[i]);
+  const c = r.cb[ci]; r.cb[ci] = [nx + (c[0] - cx) * f, ny + (c[1] - cy) * f, nx + (c[2] - cx) * f, ny + (c[3] - cy) * f];
+};
+function commitSel(g) {
+  const { items } = lsel, size = g.kind === 'size', f = size ? g.f : 1, boxes = new Set(items.map(it => it.b));
+  const held = new Set([...boxes].filter(b => b.lc && b.lc.key === layKey(b))); // anything out of date is simply laid out again by renderInk
+  items.forEach((it, i) => {
+    const s = g.st[i], [cx, cy] = s.c, nx = size ? g.anchor[0] + (cx - g.anchor[0]) * f : cx + g.dx, ny = size ? g.anchor[1] + (cy - g.anchor[1]) * f : cy + g.dy, m = modOf(it);
+    if (size) m.s = s.s * f;
+    m.dx = s.dx + nx - cx; m.dy = s.dy + ny - cy;
+    if (!held.has(it.b)) return;
+    moveCluster(it.b.r, it.ci, cx, cy, nx, ny, f);
+    const [s0, s1] = it.b.r.sr[it.ci];
+    for (let j = s0; j < s1; j++) { const q = it.b.g.children[j]; q.setAttribute('d', pathD([it.b.r.strokes[j]], false, it.b.x, it.b.y)); q.style.visibility = ''; }
+  });
+  for (const b of held) {
+    inkOf(b.r); b.lc.key = layKey(b); b.gk = b.lc.key + ink.color;
+    if (b.r.fills.length) b.g.querySelector('.fil').setAttribute('d', pathD(b.r.fills, true, b.x, b.y));
+  }
+  g.mv.remove(); lsel.el.classList.remove('moving'); lsel.el.style.transform = ''; gestOff();
+}
 function lassoEvents(pg) {
   let g = null;
   const ok = e => e.pointerType !== 'touch' || !penSeen; // once a Pencil is used, fingers scroll and only the Pencil lassos
-  const draw = () => { if (!g.raf) g.raf = requestAnimationFrame(() => { g.raf = 0; renderInk(pg); }); };
   pg.el.addEventListener('pointerdown', e => {
     if (tool !== 'lasso' || g || !ok(e) || e.target.closest('#lassoMenu')) return;
     e.preventDefault(); try { pg.el.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
@@ -696,32 +775,32 @@ function lassoEvents(pg) {
     const p = toPage(pg, e), h = e.target.closest('.h');
     if (lsel && lsel.pg === pg && e.target.closest('.lsel')) {
       const B = selBox(), anchor = h ? [h.dataset.h[1] === 'w' ? B[2] : B[0], h.dataset.h[0] === 'n' ? B[3] : B[1]] : null;
-      g = { id: e.pointerId, kind: h ? 'size' : 'move', p, anchor, d0: anchor && Math.hypot(p[0] - anchor[0], p[1] - anchor[1]),
-        st: lsel.items.map(it => { const m = modOf(it); return { dx: m.dx || 0, dy: m.dy || 0, s: m.s || 1, c: mid(cbOf(it)) }; }) };
+      g = { id: e.pointerId, kind: h ? 'size' : 'move', p, B, rc: pg.el.getBoundingClientRect(), anchor, d0: anchor && Math.hypot(p[0] - anchor[0], p[1] - anchor[1]), dx: 0, dy: 0, f: 1, raf: 0, mv: null,
+        st: lsel.items.map(it => { const m = (it.b.mods || {})[it.ci] || {}; return { dx: m.dx || 0, dy: m.dy || 0, s: m.s || 1, c: mid(cbOf(it)) }; }) };
       lsel.busy = true; $('#lassoMenu').hidden = true;
     } else { clearSel(); g = { id: e.pointerId, kind: 'loop', pts: [p] }; }
   });
   pg.el.addEventListener('pointermove', e => {
     if (!g || g.id !== e.pointerId) return;
-    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [], last = evs.length ? evs[evs.length - 1] : e, p = toPage(pg, last);
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [], last = evs.length ? evs[evs.length - 1] : e;
     if (g.kind === 'loop') {
       for (const ev of evs.length ? evs : [e]) { const q = toPage(pg, ev), l = g.pts[g.pts.length - 1]; if (Math.hypot(q[0] - l[0], q[1] - l[1]) > 1) g.pts.push(q); }
       pg.ov.innerHTML = `<path d="M${g.pts.map(q => q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join('L')}Z"/>`;
-    } else if (g.kind === 'move') {
-      lsel.items.forEach((it, i) => { const m = modOf(it); m.dx = g.st[i].dx + p[0] - g.p[0]; m.dy = g.st[i].dy + p[1] - g.p[1]; }); draw();
     } else {
-      const k = Math.min(Math.max(Math.hypot(p[0] - g.anchor[0], p[1] - g.anchor[1]) / (g.d0 || 1), 0.25), 4), A = g.anchor;
-      lsel.items.forEach((it, i) => { const m = modOf(it), s = g.st[i]; m.s = s.s * k; m.dx = s.dx + (A[0] + (s.c[0] - A[0]) * k - s.c[0]); m.dy = s.dy + (A[1] + (s.c[1] - A[1]) * k - s.c[1]); }); draw();
+      const p = toPage(pg, last, g.rc), d = g;
+      if (!d.mv) liftSel(d);
+      if (d.kind === 'move') { d.dx = p[0] - d.p[0]; d.dy = p[1] - d.p[1]; } else d.f = Math.min(Math.max(Math.hypot(p[0] - d.anchor[0], p[1] - d.anchor[1]) / (d.d0 || 1), 0.25), 4);
+      if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; selFrame(d); });
     }
   });
   const up = e => {
     if (!g || g.id !== e.pointerId) return;
-    const d = g; g = null; if (d.raf) cancelAnimationFrame(d.raf);
+    const d = g; g = null; cancelAnimationFrame(d.raf);
     if (d.kind === 'loop') {
       pg.ov.innerHTML = '';
       const xs = d.pts.map(q => q[0]), ys = d.pts.map(q => q[1]);
       if (d.pts.length > 3 && Math.max(...xs) - Math.min(...xs) + Math.max(...ys) - Math.min(...ys) > 6) selectIn(pg, d.pts);
-    } else { lsel.busy = false; renderInk(pg); }
+    } else { if (d.mv) commitSel(d); lsel.busy = false; renderInk(pg); }
   };
   pg.el.addEventListener('pointerup', up); pg.el.addEventListener('pointercancel', up);
 }
@@ -816,6 +895,7 @@ function wire() {
   $('#openFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openFile(f); };
   $('#exportBtn').onclick = exportPdf;
   $('#closeBtn').onclick = async () => { if (await ask('Close this worksheet?', 'It and your answers are removed from this device. Use Save PDF first to keep them.', { ok: 'Close', no: 'Keep', danger: true })) { closeSheet(); showTab('sheet'); } };
+  addEventListener('scroll', () => { setCalm(true); clearTimeout(calmT); calmT = setTimeout(() => { if (!gest) setCalm(false); }, 150); }, { passive: true });
   document.addEventListener('visibilitychange', () => { if (document.hidden && boxT) writeBoxes(); }); // phones kill hidden pages without warning
   addEventListener('pagehide', () => { if (boxT) writeBoxes(); });
   const inkBtns = document.querySelectorAll('.ink');

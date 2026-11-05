@@ -1,7 +1,7 @@
 /* LaiMue handwriting engine. "Box units": x-height line y=1, baseline y=2, y grows down. */
 (function (root) {
   'use strict';
-  const VERSION = 29; // shown in the ⋯ menu; bump with sw.js cache name on every release
+  const VERSION = 30; // shown in the ⋯ menu; bump with sw.js cache name on every release
   const XH = 1, BASE = 2, BOX_W = 1.6, BOX_H = 2.6, GX = 0.25, FIRST = 1.75;
   const K = 1 / 563; // Sriracha: height of ก in font units = 1 box unit
   const GHOST = { r: GX + 553 * K, adv: GX + 589 * K }; // grey ก in mark boxes: right edge, advance
@@ -997,7 +997,7 @@
     const pick = ch => { const v = pickR(ch, R, true), m = mods[ci]; return m && m.seed ? pickR(ch, rng(m.seed * 31 + ch.codePointAt(0)), false) : v; };
     const warp = () => ({ ax: J(0.03), ay: J(0.03), fx: 3 + R() * 4, fy: 3 + R() * 4, px: R() * 6.3, py: R() * 6.3 });
     const maxW = o.width / o.u, L = o.gap || 2.4, U = o.u;
-    const strokes = [], fills = [], pws = [], cb = [];
+    const strokes = [], fills = [], pws = [], cb = [], sr = []; // sr[ci] = [first stroke, end stroke, first fill, end fill] of that letter
     let cx = 0, line = 0, phase = R() * 6.3, slope = V(0.012), wrapped = false, yOff = 0, q = [];
     // a line is drawn once it is full, so a tall fraction can push it (and every line after it) down
     const flush = () => {
@@ -1009,7 +1009,7 @@
     const newline = auto => { flush(); line++; cx = 0; phase = R() * 6.3; slope = V(0.012); wrapped = auto; }; // each line runs a touch up or down
     const emit = (it, cx, Y) => {
       const by = FIRST + line * L + Y + 0.06 * mess * Math.sin(cx * 0.35 + phase) + slope * cx + it.jy;
-      const c = Math.cos(it.th), s = Math.sin(it.th), mine = [];
+      const c = Math.cos(it.th), s = Math.sin(it.th), mine = [], s0 = strokes.length, f0 = fills.length;
       it.parts.forEach((p0, k) => {
         const w = it.warps[k], list = p0.v.s ? strokes : fills;
         let p = p0;
@@ -1035,6 +1035,7 @@
           list.push(out); mine.push(out);
         }
       });
+      if (it.ci != null) sr[it.ci] = [s0, strokes.length, f0, fills.length];
       let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
       for (const a of mine) for (let i = 0; i < a.length; i += 2) { x0 = Math.min(x0, a[i]); x1 = Math.max(x1, a[i]); y0 = Math.min(y0, a[i + 1]); y1 = Math.max(y1, a[i + 1]); }
       if (it.ci == null) return; // a hand-drawn math line (fraction bar, root sign): not a letter
@@ -1210,7 +1211,7 @@
     }
     flush();
     const lw = U * 0.075 * (o.thick || 1), pens = [...new Set(pws)].sort((a, b) => a - b).map(k => [lw * k, strokes.filter((_, i) => pws[i] === k)]);
-    return { strokes, fills, pens, cb, lines: line + 1, height: (FIRST + line * L + yOff + 0.85) * U, lw }; // pens: [line width, strokes] by pen pressure
+    return { strokes, fills, pens, cb, sr, lines: line + 1, height: (FIRST + line * L + yOff + 0.85) * U, lw }; // pens: [line width, strokes] by pen pressure
   }
 
   // Test helper: a fake person who writes the font's centre lines with a pen. messy: each letter at its own

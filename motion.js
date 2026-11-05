@@ -17,10 +17,17 @@ const M = (() => {
     if (ps.length > 400) return null; // shortcut: long text skips the animation (one tween per stroke stutters on iPad)
     const lens = ps.map(p => p.getTotalLength() || 0.01), sum = lens.reduce((a, b) => a + b, 0);
     const k = Math.min(maxSec, 0.09 * ps.length + 0.3) / (sum || 1); // seconds per unit length, total capped
-    const tl = gsap.timeline({ onComplete: () => gsap.set(ps, { clearProps: 'strokeDasharray,strokeDashoffset,visibility' }) });
+    const tl = gsap.timeline({ onComplete: () => gsap.set(ps.filter(p => !gsap.isTweening(p)), { clearProps: 'strokeDasharray,strokeDashoffset,visibility' }) }); // paths now survive a redraw: leave any that a newer write-on is drawing
     ps.forEach((p, i) => { const L = lens[i]; gsap.set(p, { strokeDasharray: L + 1, strokeDashoffset: L + 1, visibility: 'hidden' }); tl.set(p, { visibility: 'visible' }).to(p, { strokeDashoffset: 0, duration: Math.max(0.04, L * k), ease: 'power1.inOut' }); });
     if (fills.length) tl.fromTo(fills, { opacity: 0 }, { opacity: 1, duration: 0.5, stagger: 0.15 }, 0);
     return tl;
+  }
+
+  // a box about to move: its ink, finished at once
+  function unwrite(el) {
+    const ps = el ? el.querySelectorAll('path') : [];
+    if (!ps.length || ps.length > 400) return; // writeOn never animates more
+    gsap.killTweensOf(ps); gsap.set(ps, { clearProps: 'strokeDasharray,strokeDashoffset,visibility,opacity' });
   }
 
   // Lottie icon into el; json in anim/. Without Lottie the element stays empty.
@@ -355,5 +362,5 @@ const M = (() => {
     gsap.fromTo(c, { x: a.left - b.left, y: a.top - b.top, scale: a.width / b.width, transformOrigin: '0 0' }, { x: 0, y: 0, scale: 1, duration: 0.6, ease: 'expo.inOut', onComplete: () => { c.remove(); el.style.opacity = ''; } });
   }
 
-  return { writeOn, icon, spark, words: type, type, frame, trace, swap, settle, tab, focus, strike, pageIn, handover, flash, learned, film, pop, prompt, intro, into, can };
+  return { writeOn, unwrite, icon, spark, words: type, type, frame, trace, swap, settle, tab, focus, strike, pageIn, handover, flash, learned, film, pop, prompt, intro, into, can };
 })();
