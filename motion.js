@@ -272,7 +272,7 @@ const M = (() => {
     const frs = pages.map((pg, i) => {
       const fr = document.createElement('div'), c = document.createElement('canvas'), h = 120, w = Math.max(40, Math.round(h * pg.w / pg.h)), l = document.createElement('span');
       c.width = w * 2; c.height = h * 2; c.style.width = w + 'px'; c.style.height = h + 'px';
-      try { c.getContext('2d').drawImage(pg.bg, 0, 0, c.width, c.height); } catch { /* blank frame */ }
+      try { c.getContext('2d').drawImage(pg.th || pg.bg, 0, 0, c.width, c.height); } catch { /* blank frame */ }
       fr.className = 'fr'; l.className = 'mono'; l.textContent = 'P.' + String(i + 1).padStart(2, '0'); fr.append(c, l); reel.append(fr); return fr;
     });
     const bar = document.createElement('div'), cap = document.createElement('div');

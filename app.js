@@ -467,8 +467,9 @@ function saveSheetFile(s) { // the old sheet goes first: if this file doesn't fi
     .catch(() => { s.noSave = true; if (s === sheet) { dropSaved(); saveWarn(s); } });
 }
 function closeSheet() {
-  select(null); clearSel(); sheet = null; $('#pages').innerHTML = ''; $('#exportBtn').disabled = true; $('#closeBtn').hidden = true;
-  $('#empty').hidden = false; $('#sheetName').textContent = 'Worksheet'; if (!NOSAVE) dropSaved();
+  if (pz) zoomEnd();
+  select(null); clearSel(); stopPages(); sheet = null; $('#zoomer').innerHTML = ''; $('#exportBtn').disabled = true; $('#closeBtn').hidden = true;
+  $('#empty').hidden = false; $('#sheetName').textContent = 'Worksheet'; if (!NOSAVE) { dropSaved(); LS.set('view', null); } zoom = 1; setView(); $('#pageChip').hidden = true;
 }
 async function restoreSheet() {
   let f, list;
@@ -513,39 +514,186 @@ async function openImage(file) {
   setSheet({ name: file.name, kind: 'img', jpg, img: cv, pages: [{ w: 595, h: 595 * cv.height / cv.width, boxes: [] }] });
 }
 function setSheet(s, quiet) {
-  select(null); clearSel(); sheet = s; $('#pages').innerHTML = ''; $('#exportBtn').disabled = false; $('#closeBtn').hidden = false;
+  if (pz) zoomEnd();
+  select(null); clearSel(); stopPages(); sheet = s; $('#zoomer').innerHTML = ''; $('#exportBtn').disabled = false; $('#closeBtn').hidden = false;
   $('#empty').hidden = true; $('#sheetName').textContent = s.name.replace(/\.[^.]+$/, '');
   for (const pg of s.pages) {
-    const el = document.createElement('div'); el.className = 'page'; el.style.aspectRatio = pg.w + ' / ' + pg.h; el.style.maxWidth = '1000px';
+    const el = document.createElement('div'); el.className = 'page'; el.style.aspectRatio = pg.w + ' / ' + pg.h;
     const bg = document.createElement('canvas'), svg = document.createElementNS(NS, 'svg');
     svg.setAttribute('viewBox', `0 0 ${pg.w} ${pg.h}`); svg.setAttribute('preserveAspectRatio', 'none');
     const ov = document.createElementNS(NS, 'svg'); ov.setAttribute('class', 'lz'); ov.setAttribute('viewBox', `0 0 ${pg.w} ${pg.h}`); ov.setAttribute('preserveAspectRatio', 'none');
-    el.classList.toggle('lasso', tool === 'lasso'); el.append(bg, svg, ov); Object.assign(pg, { el, bg, svg, ov }); $('#pages').append(el);
+    el.classList.toggle('lasso', tool === 'lasso'); el.append(bg, svg, ov); Object.assign(pg, { el, bg, svg, ov }); el.pg = pg; pg.first = new Promise(r => (pg.drawn = r)); $('#zoomer').append(el);
     pageEvents(pg);
   }
-  let chain = Promise.resolve(); // pages are drawn one after another; each page's scan starts when its own drawing is done
-  const ready = s.pages.map(pg => (chain = chain.then(() => renderBg(pg))));
-  chain.catch(e => toast('Page drawing failed: ' + e.message));
-  if (quiet) ready.forEach(r => r.catch(() => { })); else { saveSheetFile(s); M.pageIn(s.pages, ready); }
+  if (!quiet) { zoom = 1; if (!NOSAVE) LS.set('view', null); }
+  setView(); setZoom(zoom); // the pages have their real size before anything is drawn or measured
+  if (!quiet) $('#pages').scrollTo(0, 0);
+  $('#pageTotal').textContent = s.pages.length; $('#pageChip').hidden = false; $('#pageNav').hidden = s.pages.length < 2; pageChip();
+  if (s.kind === 'pdf') s.pages.forEach(pg => pageSeen.observe(pg.el)); // its first report starts the drawing
+  else { const pg = s.pages[0]; copyTo(pg.bg, s.img.width, s.img.height, s.img); pg.sc = 1; pg.drawn(); }
+  if (!quiet) { saveSheetFile(s); M.pageIn(s.pages, s.pages.map(pg => pg.first)); }
 }
-async function renderBg(pg) {
-  if (!pg.el.isConnected) return; // the sheet was closed or replaced while its pages were still drawing
-  const dpr = Math.min(devicePixelRatio || 1, 2);
-  let sc = Math.max(1, (pg.el.clientWidth || 1000) * dpr / pg.w);
-  if (pg.w * pg.h * sc * sc > 6e6) sc = Math.sqrt(6e6 / (pg.w * pg.h)); // keep iPad memory sane
-  const x = pg.bg.getContext('2d');
-  if (sheet.kind === 'pdf') {
-    const vp = pg.pdfPage.getViewport({ scale: sc }); pg.bg.width = Math.floor(vp.width); pg.bg.height = Math.floor(vp.height);
-    await pg.pdfPage.render({ canvasContext: x, viewport: vp }).promise;
-  } else { pg.bg.width = sheet.img.width; pg.bg.height = sheet.img.height; x.drawImage(sheet.img, 0, 0); }
+// ---------- pages are drawn sharp only near the view. Every page keeps a small copy (th), which stands in for its picture when far away and feeds the export filmstrip
+const TH = 400, copyTo = (c, w, h, from) => { c.width = w; c.height = h; c.getContext('2d').drawImage(from, 0, 0, w, h); };
+const sharp = pg => Math.min(Math.max(1, (pg.el.clientWidth || 1000) * Math.min(devicePixelRatio || 1, 2) / pg.w), Math.sqrt(6e6 / (pg.w * pg.h))); // the 6 MP cap keeps iPad memory sane
+async function renderBg(pg, small) {
+  const sc = small ? TH / pg.h : sharp(pg), vp = pg.pdfPage.getViewport({ scale: sc }), c = document.createElement('canvas'); c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
+  const task = pg.task = pg.pdfPage.render({ canvasContext: c.getContext('2d'), viewport: vp }); // off screen, so the old picture stays up until the new one is ready
+  try { await task.promise; } finally { if (pg.task === task) pg.task = null; }
+  if (!pg.th) { pg.th = document.createElement('canvas'); copyTo(pg.th, Math.round(pg.w * TH / pg.h), TH, c); }
+  if (!small || !pg.sc) copyTo(pg.bg, c.width, c.height, c);
+  if (!small) pg.sc = sc;
+  pg.drawn();
+}
+function freePage(pg) { if (pg.task) pg.task.cancel(); pg.sc = 0; if (pg.th) copyTo(pg.bg, pg.th.width, pg.th.height, pg.th); pg.pdfPage.cleanup(); }
+let pumping = false;
+async function pump() { // one page at a time: the nearest that isn't sharp yet, then small copies for the rest
+  if (pumping) return; pumping = true;
+  for (let s; (s = sheet) && s.kind === 'pdf' && !pz;) {
+    s.pages.forEach(p => { if (!p.near && p.sc) freePage(p); });
+    const dist = p => Math.abs(s.pages.indexOf(p) - pageNo), near = s.pages.filter(p => p.near && !p.bad && (!p.sc || Math.abs(p.sc / sharp(p) - 1) > 0.05)).sort((a, b) => dist(a) - dist(b))[0];
+    const pg = near || s.pages.find(p => !p.th && !p.bad);
+    if (!pg) break;
+    try { await renderBg(pg, !near); } catch (e) { if (e.name !== 'RenderingCancelledException') { pg.bad = true; pg.drawn(); console.error(e); toast('Page drawing failed: ' + e.message); } }
+  }
+  pumping = false;
+}
+const stopPages = () => { pageSeen.disconnect(); if (sheet) sheet.pages.forEach(p => { if (p.task) p.task.cancel(); }); };
+// ---------- the viewer: #pages scrolls, #zoomer holds the pages. A zoom gesture only transforms #zoomer (instant); on release the pages get their real width and the scroll keeps the same point under the fingers
+let zoom = 1, pz = null, settleT = 0, pageNo = 0, viewT = 0, viewRaf = 0;
+const pageSeen = new IntersectionObserver(es => { // ignored while the tab is hidden, so coming back doesn't redraw
+  if ($('#pages').clientHeight) for (const x of es) x.target.pg.near = x.isIntersecting;
+  pump();
+}, { root: $('#pages'), rootMargin: '100% 0px' });
+const setView = () => document.body.classList.toggle('view', !!sheet && !$('#sheet').hidden && !NOSAVE); // ?test keeps the long page, its results sit below
+const pageAt = y => { let best, d = Infinity; for (const pg of sheet.pages) { const r = pg.el.getBoundingClientRect(), q = y < r.top ? r.top - y : y > r.bottom ? y - r.bottom : 0; if (q < d) { d = q; best = pg; } } return best; };
+function setZoom(z) { // z = 1 is the fit width; 100% never gets wider than the old 1000 px page
+  zoom = Math.abs(z - 1) < 0.02 ? 1 : Math.min(4, Math.max(0.5, z));
+  const v = $('#pages'), zm = $('#zoomer');
+  if (document.body.classList.contains('view') && v.clientWidth) zm.style.setProperty('--pw', Math.min(v.clientWidth - 2 * parseFloat(getComputedStyle(zm).paddingLeft), 1000) * zoom + 'px');
+  $('#zoomFit').textContent = zoom === 1 ? 'Fit' : Math.round(zoom * 100) + '%';
+  clearTimeout(settleT); settleT = setTimeout(pump, 200);
+}
+const place = (pg, fx, fy, cx, cy) => { const v = $('#pages'), r = pg.el.getBoundingClientRect(); v.scrollLeft += r.left + fx * r.width - cx; v.scrollTop += r.top + fy * r.height - cy; };
+function zoomStart(cx, cy) {
+  if (pz) zoomEnd();
+  if (live && !live.pen) live.cancel();
+  down = null; sheet.pages.forEach(p => { if (p.task) p.task.cancel(); });
+  const v = $('#pages'), vr = v.getBoundingClientRect(), pg = pageAt(cy), r = pg.el.getBoundingClientRect();
+  pz = { z0: zoom, f: 1, x0: cx - vr.left + v.scrollLeft, y0: cy - vr.top + v.scrollTop, vr, cx, cy, pg, fx: (cx - r.left) / r.width, fy: (cy - r.top) / r.height, raf: 0 };
+  gestOn(); $('#zoomer').classList.add('moving');
+}
+function zoomFrame(f) {
+  pz.f = Math.min(4 / pz.z0, Math.max(0.5 / pz.z0, f));
+  if (pz.raf) return;
+  pz.raf = requestAnimationFrame(() => {
+    if (!pz) return; pz.raf = 0;
+    const v = $('#pages'), { f, x0, y0, vr, cx, cy } = pz;
+    $('#zoomer').style.transform = `translate(${cx - vr.left + v.scrollLeft - x0 * f}px, ${cy - vr.top + v.scrollTop - y0 * f}px) scale(${f})`;
+  });
+}
+function zoomEnd() {
+  const z = pz; pz = null; cancelAnimationFrame(z.raf); clearTimeout(z.t); if (z.tw) z.tw.kill();
+  const zm = $('#zoomer'); zm.style.transform = ''; zm.classList.remove('moving'); gestOff();
+  setZoom(z.z0 * z.f); place(z.pg, z.fx, z.fy, z.cx, z.cy); pageChip();
+  if (ed) fitEd(); else placeBar();
+  saveBoxes(); saveView();
+}
+function zoomTo(z, cx, cy) { // buttons, keys, double tap: a short slide to the new size
+  zoomStart(cx, cy);
+  const o = { f: 1 }, f = Math.min(4, Math.max(0.5, z)) / pz.z0;
+  if (!M.can()) { pz.f = f; return zoomEnd(); }
+  pz.tw = gsap.to(o, { f, duration: 0.2, ease: 'power2.out', onUpdate: () => zoomFrame(o.f), onComplete: zoomEnd });
+}
+const zoomMid = z => { const r = $('#pages').getBoundingClientRect(); zoomTo(z, r.left + r.width / 2, r.top + r.height / 2); };
+const zoomToggle = e => zoomTo(zoom === 1 ? 2 : 1, e.clientX, e.clientY);
+let tap0 = null;
+const dblTap = e => { const p = tap0, t = Date.now(); tap0 = { x: e.clientX, y: e.clientY, t }; if (!p || t - p.t > 320 || Math.hypot(e.clientX - p.x, e.clientY - p.y) > 30) return false; tap0 = null; return true; };
+function saveView() { // where you were comes back after a refresh or a tab change
+  if (NOSAVE || !sheet || !$('#pages').clientHeight) return;
+  const vr = $('#pages').getBoundingClientRect(), pg = pageAt(vr.top), r = pg.el.getBoundingClientRect();
+  LS.set('view', { z: zoom, i: sheet.pages.indexOf(pg), fx: (vr.left - r.left) / r.width, fy: (vr.top - r.top) / r.height });
+}
+function showView() {
+  setView(); if (!sheet || !document.body.classList.contains('view')) return;
+  const q = LS.get('view', null), pg = q && sheet.pages[q.i], vr = $('#pages').getBoundingClientRect();
+  setZoom(pg ? q.z : zoom);
+  if (pg) place(pg, q.fx, q.fy, vr.left, vr.top);
+  pageChip();
+}
+function pageChip() {
+  if (!sheet || !$('#pages').clientHeight) return;
+  const vr = $('#pages').getBoundingClientRect(), n = $('#pageNum'); pageNo = sheet.pages.indexOf(pageAt(vr.top + vr.height / 2));
+  if (document.activeElement !== n) n.value = pageNo + 1;
+}
+function goPage(i) {
+  const pg = sheet.pages[Math.max(0, Math.min(sheet.pages.length - 1, i))], v = $('#pages');
+  v.scrollBy({ top: pg.el.getBoundingClientRect().top - v.getBoundingClientRect().top - 12, behavior: M.can() ? 'smooth' : 'auto' }); pageChip();
+}
+function wireViewer() {
+  const v = $('#pages'), between = t => [(t[0].clientX + t[1].clientX) / 2, (t[0].clientY + t[1].clientY) / 2], apart = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  v.addEventListener('scroll', () => {
+    setCalm(true); clearTimeout(calmT); calmT = setTimeout(() => { if (!gest) setCalm(false); }, 150);
+    if (!viewRaf) viewRaf = requestAnimationFrame(() => { viewRaf = 0; if (!pz) pageChip(); });
+    clearTimeout(viewT); viewT = setTimeout(saveView, 250);
+  }, { passive: true });
+  // two fingers: pan and zoom ourselves (the browser only ever pans, touch-action: pan-x pan-y). A Pencil on the glass never counts as a finger.
+  v.addEventListener('touchstart', e => {
+    const t = e.touches;
+    if (!sheet || t.length !== 2 || [...t].some(q => q.touchType === 'stylus') || (live && live.pen)) return;
+    if (e.cancelable) e.preventDefault();
+    zoomStart(...between(t)); pz.d0 = apart(t) || 1;
+  }, { passive: false });
+  v.addEventListener('touchmove', e => {
+    if (!pz || !pz.d0 || e.touches.length < 2) return;
+    if (e.cancelable) e.preventDefault();
+    [pz.cx, pz.cy] = between(e.touches); zoomFrame(apart(e.touches) / pz.d0);
+  }, { passive: false });
+  const fingersUp = e => { if (pz && pz.d0 && e.touches.length < 2) zoomEnd(); };
+  v.addEventListener('touchend', fingersUp); v.addEventListener('touchcancel', fingersUp);
+  v.addEventListener('wheel', e => { // Ctrl/Cmd + wheel; a trackpad pinch arrives as Ctrl + wheel too
+    if (!sheet || (!e.ctrlKey && !e.metaKey)) return;
+    e.preventDefault();
+    if (!pz || pz.tw) zoomStart(e.clientX, e.clientY);
+    pz.cx = e.clientX; pz.cy = e.clientY;
+    zoomFrame(pz.f * Math.exp(-Math.max(-25, Math.min(25, e.deltaY * (e.deltaMode ? 16 : 1))) / 100));
+    clearTimeout(pz.t); pz.t = setTimeout(zoomEnd, 150);
+  }, { passive: false });
+  // Mac Safari's trackpad pinch only sends these (on iPad the touch code above has already started)
+  v.addEventListener('gesturestart', e => { if (sheet && !pz) { zoomStart(e.clientX, e.clientY); pz.mac = true; } });
+  v.addEventListener('gesturechange', e => { if (pz && pz.mac) zoomFrame(e.scale); });
+  v.addEventListener('gestureend', () => { if (pz && pz.mac) zoomEnd(); });
+  let lastW = 0;
+  addEventListener('resize', () => { // turning the device: same zoom, same top-left corner (the keyboard and address bar don't change the width)
+    if (!sheet || !v.clientWidth || v.clientWidth === lastW) return; lastW = v.clientWidth;
+    const r = v.getBoundingClientRect(); zoomStart(r.left, r.top); zoomEnd();
+  });
+  const stepZ = k => { const z = zoom * k; zoomMid(Math.abs(z - 1) < 0.1 ? 1 : z); };
+  $('#zoomIn').onclick = () => stepZ(1.25); $('#zoomOut').onclick = () => stepZ(0.8); $('#zoomFit').onclick = () => zoomMid(1);
+  $('#pgPrev').onclick = () => goPage(pageNo - 1); $('#pgNext').onclick = () => goPage(pageNo + 1);
+  const n = $('#pageNum');
+  n.onfocus = () => n.select();
+  n.onchange = () => { const i = parseInt(n.value, 10); n.blur(); if (i >= 1) goPage(i - 1); else pageChip(); };
+  n.onkeydown = e => { if (e.key === 'Enter') n.blur(); };
+  n.onblur = () => pageChip();
+  document.addEventListener('keydown', e => {
+    if (!sheet || $('#sheet').hidden || !$('#ask').hidden) return;
+    if ((e.ctrlKey || e.metaKey) && ['+', '=', '-', '0'].includes(e.key)) { e.preventDefault(); return e.key === '0' ? zoomMid(1) : stepZ(e.key === '-' ? 0.8 : 1.25); }
+    if (e.key !== 'PageDown' && e.key !== 'PageUp' || e.target.matches('textarea, input')) return;
+    e.preventDefault(); goPage(pageNo + (e.key === 'PageDown' ? 1 : -1));
+  });
+  // nothing may stay stuck if a finger's release never reached its box
+  for (const t of ['pointerup', 'pointercancel']) addEventListener(t, e => { if (live && live.id === e.pointerId) live.cancel(); });
 }
 function pageEvents(pg) {
   lassoEvents(pg);
   pg.el.addEventListener('click', () => { if (ed && ed.pg === pg && document.activeElement !== $('#txt')) $('#txt').focus({ preventScroll: true }); }); // iPad: a second chance to open the keyboard inside the tap
-  pg.el.addEventListener('pointerdown', e => { down = tool !== 'text' || e.target.closest('.tbox') ? null : { x: e.clientX, y: e.clientY, t: Date.now() }; });
+  pg.el.addEventListener('pointerdown', e => { down = e.target.closest('.tbox, .lsel, #lassoMenu') ? null : { x: e.clientX, y: e.clientY, t: Date.now() }; });
   pg.el.addEventListener('pointerup', e => {
     const d = down; down = null;
     if (!d || e.target.closest('.tbox') || Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10 || Date.now() - d.t > 700) return;
+    if (dblTap(e)) { select(null); return zoomToggle(e); } // the first tap's new box is still empty, so closing it removes it (it can't wait: the iPad keyboard only opens inside the tap)
+    if (tool !== 'text') return;
     if (sel) return select(null); // first tap outside just writes and closes the open box
     const [x, y] = toPage(pg, e), u = LS.get('u', 0) || +(pg.w * 0.016).toFixed(2), gap = LS.get('gap', 2.4);
     const box = { x: Math.max(0, x - 2), y: y - 1.75 * u, w: Math.max(60, Math.min(pg.w * 0.45, pg.w - x - 4)), u, gap, neat: LS.get('neat', 1), seed: (Math.random() * 1e9) | 0, text: '' };
@@ -566,21 +714,34 @@ function addBoxEl(pg, box) {
     follow();
   };
   el.addEventListener('pointerdown', e => {
-    e.stopPropagation(); if (e.target.id === 'txt') return; // taps inside the open text move the caret
+    e.stopPropagation(); if (e.target.id === 'txt' || live) return; // taps inside the open text move the caret
     e.preventDefault(); try { el.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
-    drag = { id: e.pointerId, k: pg.el.getBoundingClientRect().width / pg.w, bw: box.w, grip: e.target.classList.contains('grip'), moved: false, cx: e.clientX, cy: e.clientY, dx: 0, dy: 0, raf: 0, t: 0, mv: null };
+    const grip = e.target.classList.contains('grip');
+    drag = { id: e.pointerId, k: pg.el.getBoundingClientRect().width / pg.w, bw: box.w, grip, moved: false, cx: e.clientX, cy: e.clientY, dx: 0, dy: 0, raf: 0, t: 0, mv: null,
+      still: e.pointerType === 'touch' && penSeen && !grip && !el.classList.contains('on') }; // once a pen is seen a finger on an unselected box scrolls (CSS lets it); a tap still selects
+    live = { id: e.pointerId, pen: e.pointerType === 'pen', cancel };
   });
   el.addEventListener('pointermove', e => {
-    if (!drag || drag.id !== e.pointerId) return;
+    if (!drag || drag.id !== e.pointerId || drag.still) return;
     if (!drag.moved && Math.hypot(e.clientX - drag.cx, e.clientY - drag.cy) < 6) return;
     const d = drag;
     if (!d.moved) { d.moved = true; gestOn(); if (!d.grip) { M.unwrite(box.g); d.mv = lift(pg, [box.g.cloneNode(true)]); box.g.style.visibility = 'hidden'; el.classList.add('moving'); } }
     d.dx = (e.clientX - d.cx) / d.k; d.dy = (e.clientY - d.cy) / d.k;
     if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; if (d.grip) gripFrame(d); else el.style.transform = d.mv.style.transform = `translate(${d.dx * d.k}px, ${d.dy * d.k}px)`; });
   });
+  const cancel = () => { // a second finger or a cancelled touch: everything goes back where it was
+    const d = drag; drag = null; live = null; if (!d) return;
+    cancelAnimationFrame(d.raf); clearTimeout(d.t);
+    if (!d.moved) return;
+    gestOff();
+    if (d.grip) box.w = d.bw; else { d.mv.remove(); el.classList.remove('moving'); el.style.transform = ''; }
+    slowThen(box, () => renderInk(pg));
+  };
   const up = e => {
+    if (!drag && e.target.id === 'txt' && !box.text.trim() && dblTap(e)) { select(null); return zoomToggle(e); } // the first tap's box is open, so the second lands in its text
     if (!drag || drag.id !== e.pointerId) return;
-    const d = drag; drag = null; cancelAnimationFrame(d.raf); clearTimeout(d.t);
+    const d = drag; drag = null; live = null; cancelAnimationFrame(d.raf); clearTimeout(d.t);
+    if (!d.moved && !box.text.trim() && dblTap(e)) { select(null); return zoomToggle(e); } // the box the first tap of a double tap just made
     if (d.moved) {
       gestOff();
       if (d.grip) { box.w = gripW(d); slowThen(box, () => renderInk(pg)); }
@@ -588,7 +749,7 @@ function addBoxEl(pg, box) {
     }
     if (!sel || sel.box !== box) select({ pg, box }, !d.moved); else if (!d.moved) openEd(); else placeBar();
   };
-  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', up);
+  el.addEventListener('pointerup', up); el.addEventListener('pointercancel', e => { if (drag && drag.id === e.pointerId) cancel(); });
 }
 // one <g> per box, placed at the box: its paths are rewritten only when its ink changed, and moving a box only changes the group's position
 function drawBox(pg, b) {
@@ -609,7 +770,7 @@ function renderInk(pg) {
   saveBoxes();
 }
 // ---------- during a gesture only a picture moves: a copy of the moving ink in its own layer (no repaint of the page, no engine, no saving); the real change is written once, on release
-let gest = false, calmT = 0;
+let gest = false, calmT = 0, live = null; // live = the box drag or lasso a finger or pen is doing right now
 const setCalm = on => document.body.classList.toggle('calm', on); // decoration rests while something moves
 const gestOn = () => { gest = true; clearTimeout(calmT); clearTimeout(boxT); setCalm(true); $('#panel').hidden = true; }; // a save still waiting joins the one at release
 const gestOff = () => { gest = false; setCalm(false); };
@@ -660,16 +821,19 @@ function placeBar() { // above the box like the lasso menu; under it when there 
   if (p.parentNode !== sel.pg.el) sel.pg.el.append(p); // moving it would replay its fade-in on every redraw
   p.hidden = false;
   const top = el.offsetTop - p.offsetHeight - 12, x = el.offsetLeft + el.offsetWidth / 2 - p.offsetWidth / 2;
-  p.style.left = Math.max(0, Math.min(x, W - p.offsetWidth)) + 'px';
-  p.style.top = (top < 0 ? el.offsetTop + el.offsetHeight + 12 : top) + 'px';
+  const vr = $('#pages').getBoundingClientRect(), pr = sel.pg.el.getBoundingClientRect(), lo = Math.max(0, vr.left - pr.left), hi = Math.min(W, vr.right - pr.left); // zoomed in: stays in the part of the page you can see
+  p.style.left = Math.max(lo, Math.min(x, hi - p.offsetWidth)) + 'px';
+  p.style.top = (top < 0 || pr.top + top < vr.top ? el.offsetTop + el.offsetHeight + 12 : top) + 'px';
 }
 function keepVisible() { // the iPad keyboard covers the bottom: scroll the open box (and its bar) into what is left
+  const vv = window.visualViewport, kb = ed && vv ? innerHeight - vv.height : 0, V = $('#pages');
+  $('#zoomer').style.paddingBottom = kb > 60 ? kb + 84 + 'px' : ''; // room to lift a box from the very bottom of the last page
   if (!ed) return;
-  const vv = window.visualViewport, vt = vv ? vv.offsetTop : 0, vb = vt + (vv ? vv.height : innerHeight);
-  const top = Math.max(vt, $('#sheet > .title-row').getBoundingClientRect().bottom) + 8;
+  const vt = vv ? vv.offsetTop : 0, vb = Math.min(vt + (vv ? vv.height : innerHeight), V.getBoundingClientRect().bottom);
+  const top = Math.max(vt, V.getBoundingClientRect().top) + 8;
   const a = ed.box.el.getBoundingClientRect(), b = $('#panel').getBoundingClientRect(), y0 = Math.min(a.top, b.top), y1 = Math.max(a.bottom, b.bottom);
   let d = y1 > vb - 12 ? y1 - vb + 12 : 0; if (y0 - d < top) d = y0 - top;
-  if (Math.abs(d) > 2) scrollBy({ top: d, behavior: M.can() ? 'smooth' : 'auto' });
+  if (Math.abs(d) > 2) V.scrollBy({ top: d, behavior: M.can() ? 'smooth' : 'auto' });
 }
 // ---------- Lasso tool: circle letters, then drag to move, drag a corner to resize, or rewrite them in a fresh variation
 let tool = 'text', lsel = null; // every visit starts on Text, so a tap always adds a box
@@ -769,7 +933,7 @@ function lassoEvents(pg) {
   let g = null;
   const ok = e => e.pointerType !== 'touch' || !penSeen; // once a Pencil is used, fingers scroll and only the Pencil lassos
   pg.el.addEventListener('pointerdown', e => {
-    if (tool !== 'lasso' || g || !ok(e) || e.target.closest('#lassoMenu')) return;
+    if (tool !== 'lasso' || g || live || !ok(e) || e.target.closest('#lassoMenu')) return;
     e.preventDefault(); try { pg.el.setPointerCapture(e.pointerId); } catch { } // synthetic test pointers can't be captured
     if (e.pointerType === 'pen' && !penSeen) { penSeen = true; LS.set('pen', true); document.body.classList.add('pen-seen'); }
     const p = toPage(pg, e), h = e.target.closest('.h');
@@ -779,6 +943,7 @@ function lassoEvents(pg) {
         st: lsel.items.map(it => { const m = (it.b.mods || {})[it.ci] || {}; return { dx: m.dx || 0, dy: m.dy || 0, s: m.s || 1, c: mid(cbOf(it)) }; }) };
       lsel.busy = true; $('#lassoMenu').hidden = true;
     } else { clearSel(); g = { id: e.pointerId, kind: 'loop', pts: [p] }; }
+    live = { id: e.pointerId, pen: e.pointerType === 'pen', cancel };
   });
   pg.el.addEventListener('pointermove', e => {
     if (!g || g.id !== e.pointerId) return;
@@ -793,16 +958,23 @@ function lassoEvents(pg) {
       if (!d.raf) d.raf = requestAnimationFrame(() => { d.raf = 0; selFrame(d); });
     }
   });
+  const cancel = () => { // nothing is written until release, so going back only needs the real ink redrawn
+    const d = g; g = null; live = null; if (!d) return;
+    cancelAnimationFrame(d.raf);
+    if (d.kind === 'loop') { pg.ov.innerHTML = ''; return; }
+    if (d.mv) { d.mv.remove(); lsel.el.classList.remove('moving'); lsel.el.style.transform = ''; gestOff(); for (const it of lsel.items) it.b.gk = null; }
+    lsel.busy = false; renderInk(pg);
+  };
   const up = e => {
     if (!g || g.id !== e.pointerId) return;
-    const d = g; g = null; cancelAnimationFrame(d.raf);
+    const d = g; g = null; live = null; cancelAnimationFrame(d.raf);
     if (d.kind === 'loop') {
       pg.ov.innerHTML = '';
       const xs = d.pts.map(q => q[0]), ys = d.pts.map(q => q[1]);
       if (d.pts.length > 3 && Math.max(...xs) - Math.min(...xs) + Math.max(...ys) - Math.min(...ys) > 6) selectIn(pg, d.pts);
     } else { if (d.mv) commitSel(d); lsel.busy = false; renderInk(pg); }
   };
-  pg.el.addEventListener('pointerup', up); pg.el.addEventListener('pointercancel', up);
+  pg.el.addEventListener('pointerup', up); pg.el.addEventListener('pointercancel', e => { if (g && g.id === e.pointerId) cancel(); });
 }
 
 const hex = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16) / 255);
@@ -839,6 +1011,7 @@ async function buildPdf(onPage) { // onPage(i): progress, with a short pause so 
 async function exportPdf() {
   if (!sheet) return; select(null);
   const btn = $('#exportBtn'), lb = btn.querySelector('span'), n = sheet.pages.length; btn.disabled = true;
+  await Promise.all(sheet.pages.map(p => p.first)); // the filmstrip shows every page's small copy
   const fm = M.film(sheet.pages);
   try {
     const bytes = await buildPdf(i => { lb.textContent = `Saving ${i + 1}/${n}`; fm.step(i); }); fm.end(btn);
@@ -851,8 +1024,9 @@ async function exportPdf() {
 
 // ---------- tabs, wiring, start
 function showTab(t, quiet) {
-  const dir = t === 'sheet' ? 1 : -1; LS.set('tab', t);
+  const dir = t === 'sheet' ? 1 : -1; LS.set('tab', t); saveView();
   for (const s of ['teach', 'sheet']) $('#' + s).hidden = s !== t;
+  if (t === 'sheet') showView(); else setView(); // before the tab's slide-in moves the rects
   document.querySelectorAll('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   if (t !== 'teach') cancelAdv();
   M.tab($('#' + t), dir);
@@ -895,9 +1069,9 @@ function wire() {
   $('#openFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) openFile(f); };
   $('#exportBtn').onclick = exportPdf;
   $('#closeBtn').onclick = async () => { if (await ask('Close this worksheet?', 'It and your answers are removed from this device. Use Save PDF first to keep them.', { ok: 'Close', no: 'Keep', danger: true })) { closeSheet(); showTab('sheet'); } };
-  addEventListener('scroll', () => { setCalm(true); clearTimeout(calmT); calmT = setTimeout(() => { if (!gest) setCalm(false); }, 150); }, { passive: true });
+  wireViewer();
   document.addEventListener('visibilitychange', () => { if (document.hidden && boxT) writeBoxes(); }); // phones kill hidden pages without warning
-  addEventListener('pagehide', () => { if (boxT) writeBoxes(); });
+  addEventListener('pagehide', () => { if (boxT) writeBoxes(); saveView(); });
   const inkBtns = document.querySelectorAll('.ink');
   const markInk = () => inkBtns.forEach(b => b.classList.toggle('on', b.dataset.c === ink.color));
   inkBtns.forEach(b => (b.onclick = () => { ink.color = b.dataset.c; LS.set('color', ink.color); markInk(); if (sheet) sheet.pages.forEach(renderInk); }));

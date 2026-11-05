@@ -149,7 +149,17 @@
         <button id="openBtn2" class="btn primary"><svg class="i"><use href="#i-open"/></svg>Open worksheet</button>
       </div>
     </div>
-    <div id="pages"></div>
+    <div id="pages"><div id="zoomer"></div></div>
+    <div id="pageChip" class="float" hidden>
+      <span id="pageNav">
+        <button id="pgPrev" aria-label="Previous page"><svg class="i"><use href="#i-left"/></svg></button>
+        <label class="mono"><input id="pageNum" inputmode="numeric" autocomplete="off" aria-label="Go to page number"> / <span id="pageTotal"></span></label>
+        <button id="pgNext" aria-label="Next page"><svg class="i"><use href="#i-right"/></svg></button>
+      </span>
+      <button id="zoomOut" aria-label="Zoom out">&minus;</button>
+      <button id="zoomFit" class="mono" aria-label="Fit page to width">Fit</button>
+      <button id="zoomIn" aria-label="Zoom in">+</button>
+    </div>
   </div>
 </section>
 </main>
